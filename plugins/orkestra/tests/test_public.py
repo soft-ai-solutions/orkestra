@@ -119,7 +119,7 @@ class TestPublicRepository(unittest.TestCase):
         notices = (ROOT / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
         pinned = (vendor / "PINNED.md").read_text(encoding="utf-8")
         dirs = sorted(p.name for p in vendor.iterdir() if p.is_dir())
-        self.assertGreaterEqual(len(dirs), 9)
+        self.assertGreaterEqual(len(dirs), 2)
         for d in dirs:
             lic = vendor / d / "LICENSE"
             self.assertTrue(lic.is_file() and lic.stat().st_size > 200, f"vendor/{d} has no LICENSE")
@@ -130,14 +130,14 @@ class TestPublicRepository(unittest.TestCase):
             if "Apache" in row or "Apache" in lic.read_text(encoding="utf-8")[:200]:
                 full = vendor / d / "LICENSE-APACHE-2.0.txt"
                 self.assertIn("TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION", full.read_text(encoding="utf-8"))
-        for holder in ("Jesse Vincent", "GitHub, Inc.", "BMad Code, LLC", "Open GSD", "OpenSpec Contributors",
-                       "humanlayer Authors", "Every", "Affaan Mustafa"):
+        for holder in ("Jesse Vincent", "Affaan Mustafa"):
             self.assertIn(holder, notices)
         self.assertEqual((helpers.PLUGIN / "LICENSE").read_text(), (ROOT / "LICENSE").read_text())
         self.assertTrue((helpers.PLUGIN / "THIRD_PARTY_NOTICES.md").is_file())
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("THIRD_PARTY_NOTICES.md", readme)
-        self.assertIn("Apache-2.0", readme)
+        self.assertIn("https://github.com/obra/superpowers", readme)
+        self.assertIn("https://github.com/affaan-m/ECC", readme)
 
     def test_nothing_private_is_published(self):
         bad = re.compile(r"[\w.+-]+@(gmail|hotmail|outlook|yahoo|icloud)\.\w+|/Users/[a-z][\w.-]+/|/home/[a-z][\w.-]+/"

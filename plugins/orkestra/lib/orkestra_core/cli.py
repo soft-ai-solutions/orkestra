@@ -384,7 +384,12 @@ def cmd_context(a: argparse.Namespace) -> int:
         return 0
     config_problem = _project_config_problem(project)
     cfg = {"gates": []} if config_problem else paths.project_config(project)
-    dg = M.digest(project) if paths.memory_dir(project).is_dir() else {}
+    query = ""
+    if project_active_run(project):
+        active = load_state(project, project_active_run(project))
+        query = str(active.get("title") or "") + "\n" + read_text(
+            paths.feature_dir(project, str(active.get("run_id") or "")) / "request.md")[:800]
+    dg = M.digest(project, query=query) if paths.memory_dir(project).is_dir() else {}
     gates_txt = ", ".join(g["name"] for g in cfg.get("gates") or []) or "none configured"
     if not paths.okdir(project).is_dir():
         gates_txt = ", ".join(g["name"] for g in G.detect(project)) + " (detected, not saved)"
@@ -428,7 +433,12 @@ def cmd_context(a: argparse.Namespace) -> int:
     if dg.get("features"):
         _out("--- recent features\n" + dg["features"])
     if dg.get("learnings"):
-        _out("--- latest learnings\n" + dg["learnings"])
+        label = "relevant learnings" if dg.get("learnings_matched") == "1" else "latest learnings"
+        _out("--- " + label + "\n" + dg["learnings"])
+    if dg:
+        problems = M.check(project)
+        if problems:
+            _out("memory check: " + "; ".join(problems[:3]))
     return 0
 
 
@@ -482,6 +492,10 @@ def cmd_start(a: argparse.Namespace) -> int:
         _out(f"WARNING: {len(others)} other runs are open on this machine ({', '.join(others)}). They share CPU with this "
              f"one (tests, builds, simulators) and every run gets slower. Tell the user in one line; continue if they want.")
     _out(f"next action: {phase_goal('intake')}")
+    if paths.memory_dir(project).is_dir():
+        lessons = M.digest(project, query=request)
+        if lessons.get("learnings_matched") == "1" and lessons.get("learnings"):
+            _out("lessons for this request:\n" + lessons["learnings"])
     if kept:
         _out(kept)
     _out(bind_marker(project, rid))
@@ -1205,13 +1219,26 @@ def cmd_memory(a: argparse.Namespace) -> int:
     project = _resolve_project(a.project)
     assert project is not None
     text = " ".join(a.text or []).strip()
-    if a.action != "show":
+    if a.action not in ("show", "check"):
         R.init_project(project)
+    if a.action == "check":
+        problems = M.check(project)
+        if problems:
+            _out("\n".join(problems))
+            return 1
+        _out("memory check: OK")
+        return 0
+    if a.action == "observe":
+        dest = paths.memory_dir(project) / "PROJECT.md"
+        blank = (not dest.is_file()) or M.is_template(read_text(dest))
+        R.init_project(project)
+        _out("memory observe: " + ("wrote PROJECT.md" if blank else "PROJECT.md already filled"))
+        return 0
     if a.action == "show":
         if not paths.memory_dir(project).is_dir():
             _out("memory not initialized for this project")
             return 0
-        dg = M.digest(project, max_features=50)
+        dg = M.digest(project, max_features=50, learnings_limit=50)
         for k, v in dg.items():
             _out(f"--- {k}\n{v}")
         return 0
@@ -1319,7 +1346,19 @@ def cmd_run(a: argparse.Namespace) -> int:
         if not EN.copilot_hooks_active(plugin_dir):
             raise OrkestraError("Orkestra's Copilot hooks are not installed. Install the Orkestra plugin with "
                                 "UserPromptSubmit, PreToolUse and PostToolUse hooks before starting a guarded Copilot run.")
+    if engine == "pi":
+        from . import pikit as PK
+        if not PK.skills_installed() or not PK.guards_installed():
+            raise OrkestraError(i18n.t("cli.pi_skills_required"))
+        import uuid
+        opts_pi_sid = uuid.uuid4().hex
+    else:
+        opts_pi_sid = ""
     opts = dict(((cfg.get("engine") or {}).get(engine)) or {})
+    if opts_pi_sid:
+        opts["session_id"] = opts_pi_sid
+        from . import pikit as PK
+        opts["extension"] = str(PK.extension_path())
     if plugin_dir:
         opts["plugin_dir"] = plugin_dir
     approval_mode = a.approval_mode or ("manual" if intent.manual_approval_requested(request) else "autopilot")
@@ -1332,6 +1371,12 @@ def cmd_run(a: argparse.Namespace) -> int:
     _require_usable_home()
     st = R.open_run_for_request(project, request, engine=engine, mode="interactive", approval_mode=approval_mode)
     rid = st["run_id"]
+    if opts_pi_sid:
+        from . import activity as A
+        from . import state as ST
+        sid = EN.session_key("pi", opts_pi_sid)
+        ST.bind_session(sid, project, rid, engine="pi")
+        A.record(project, rid, {"session_id": sid}, "bind", "pi session")
     _out(i18n.t("cli.run_opened", run=rid, project=project.name, size=st.get("size") or ""))
     _out(f"artifacts: {paths.feature_dir(project, rid)}  (short path: .orkestra/current/)")
     _out(i18n.t("cli.run_dashboard_hint"))
@@ -1339,6 +1384,8 @@ def cmd_run(a: argparse.Namespace) -> int:
     sys.stderr.flush()
     os.chdir(str(project))
     env = EN.child_env(engine)
+    if opts_pi_sid:
+        env["ORKESTRA_PI_SESSION"] = opts_pi_sid
     env.pop("ORKESTRA_HEADLESS", None)              # this is the interactive UI: the user answers in it
     env["ORKESTRA_APPROVAL_MODE"] = approval_mode
     os.execve(binary, argv, env)
@@ -1375,6 +1422,44 @@ def cmd_cursor(a: argparse.Namespace) -> int:
                 _out(f"[{'i ' if good is None else ('OK' if good else '!!')}] {label}" + (f" — {detail}" if detail else ""))
             if a.action == "install":               # the install itself worked (or raised); the lines above say what
                 return 0                            # else is still missing (Cursor CLI, PATH)
+            return 0 if ok else 1
+    except EN.EngineError as exc:
+        raise OrkestraError(str(exc))
+    return 0
+
+
+def cmd_pi(a: argparse.Namespace) -> int:
+    """Pi side: install/uninstall/status for skills and the tool extension under ~/.pi/agent."""
+    from . import pikit as PK
+    if _ASKER:
+        raise OrkestraError("`orkestra pi …` changes the Pi configuration: run it from your terminal.")
+    try:
+        if a.action == "install":
+            done = PK.install(dry=a.dry_run)
+            for line in done:
+                _out(i18n.t("cli.kit_would", action=line) if a.dry_run else line)
+            if a.dry_run:
+                summary = "cli.pi_dry_run"
+            elif not done:
+                summary = "cli.pi_nothing"
+            elif PK.skills_installed() and PK.guards_installed():
+                summary = "cli.pi_installed"
+            else:
+                summary = "cli.pi_partial"
+            _out(i18n.t(summary))
+        elif a.action == "uninstall":
+            done = PK.uninstall(dry=a.dry_run)
+            for line in done:
+                _out(i18n.t("cli.kit_would", action=line) if a.dry_run else line)
+            _out(i18n.t("cli.pi_nothing_installed" if not done else
+                        ("cli.pi_dry_run" if a.dry_run else "cli.pi_removed")))
+        if a.action in ("status", "install"):
+            ok = True
+            for good, label, detail in PK.status():
+                ok = ok and good is not False
+                _out(f"[{'i ' if good is None else ('OK' if good else '!!')}] {label}" + (f" — {detail}" if detail else ""))
+            if a.action == "install":
+                return 0
             return 0 if ok else 1
     except EN.EngineError as exc:
         raise OrkestraError(str(exc))
@@ -1448,10 +1533,12 @@ def _setup_detect() -> Dict[str, bool]:
     """Which host engines look present (Claude on PATH, Cursor/Copilot home dirs)."""
     from . import cursorkit as Cur
     from . import copilotkit as Cop
+    from . import pikit as PiK
     return {
         "claude": shutil.which("claude") is not None,
         "cursor": Cur.cursor_home().is_dir(),
         "copilot": Cop.copilot_home().is_dir(),
+        "pi": PiK.detected(),
     }
 
 
@@ -1522,6 +1609,18 @@ def cmd_setup(a: argparse.Namespace) -> int:
             _out(i18n.t("cli.setup_line", engine="Cursor", state=state("current" if not done else "installed")))
         else:
             _out(i18n.t("cli.setup_line", engine="Cursor", state=state("skipped")))
+    if detected.get("pi"):
+        from . import pikit as PiK
+        if yes or _ask_yn(i18n.t("cli.setup_ask_pi"), "y"):
+            try:
+                done = PiK.install()
+            except EN.EngineError as exc:
+                raise OrkestraError(str(exc))
+            for line in done:
+                _out(line)
+            _out(i18n.t("cli.setup_line", engine="Pi", state=state("current" if not done else "installed")))
+        else:
+            _out(i18n.t("cli.setup_line", engine="Pi", state=state("skipped")))
     if detected["copilot"]:
         if yes or _ask_yn(i18n.t("cli.setup_ask_copilot"), "y"):
             try:
@@ -1760,6 +1859,14 @@ def cmd_doctor(a: argparse.Namespace) -> int:
     copilot_ready = EN.copilot_hooks_active(copilot_dir)
     soft(cursor_ready, "cursor hooks", i18n.t("cli.doctor_active" if cursor_ready else "cli.doctor_not_installed"))
     soft(copilot_ready, "copilot hooks", i18n.t("cli.doctor_active" if copilot_ready else "cli.doctor_not_installed"))
+    from . import pikit as PiK
+    pi_rows = {label: (good, detail) for good, label, detail in PiK.status()}
+    pi_skills_ok, pi_skills_detail = pi_rows["pi skills"]
+    soft(bool(pi_skills_ok), "pi skills", pi_skills_detail)
+    pi_guard_ok, pi_guard_detail = pi_rows["pi extension"]
+    soft(bool(pi_guard_ok), "pi extension", pi_guard_detail)
+    pi_bin_ok, pi_bin_detail = pi_rows["pi"]
+    soft(bool(pi_bin_ok), "pi", pi_bin_detail)
     try:                                            # informational: the fast stall watcher (POSIX only)
         from . import fastwatch
         fw = fastwatch.status()
@@ -1768,7 +1875,7 @@ def cmd_doctor(a: argparse.Namespace) -> int:
              else i18n.t("watchdog.fast_doctor_off", autostart="on" if fw["autostart"] else "off"))
     except Exception as exc:  # pragma: no cover
         _out(f"[--] fast watcher: unknown ({type(exc).__name__})")
-    engines_ready = sum((claude_ready, cursor_ready, copilot_ready))
+    engines_ready = sum((claude_ready, cursor_ready, copilot_ready, bool(pi_skills_ok and pi_guard_ok and pi_bin_ok)))
     line(engines_ready >= 1, "engine ready",
          i18n.t("cli.doctor_engines_ready", count=engines_ready) if engines_ready else i18n.t("cli.doctor_engines_none"))
     if claude_ready:
@@ -1792,7 +1899,7 @@ HANDLERS = {
     "pause": cmd_status_change, "abort": cmd_status_change, "gate": cmd_gate, "tdd": cmd_tdd, "task": cmd_task,
     "brief": cmd_brief, "plan": cmd_check, "trace": cmd_check, "deps": cmd_check, "review": cmd_check,
     "changes": cmd_changes, "diff": cmd_diff, "rollback": cmd_rollback, "clean": cmd_clean, "memory": cmd_memory,
-    "playbook": cmd_playbook, "template": cmd_template, "doctor": cmd_doctor,
+    "playbook": cmd_playbook, "template": cmd_template, "doctor": cmd_doctor, "pi": cmd_pi,
     "watch": cmd_watch, "dashboard": cmd_dashboard,
     "evidence": cmd_evidence, "integrity": cmd_integrity, "report": cmd_report,
     "next": cmd_next, "wait": cmd_wait, "tempo": cmd_tempo, "watchdog": cmd_watchdog, "agents": cmd_agents,

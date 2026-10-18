@@ -374,6 +374,7 @@ class TestTerminalView(MonitorBase):
             " döngü  a loop",
             " döngü  b loop",
             " tempo  toplam 1 sa 56 dk · görev başına 6 dk · inceleme reddi 2 (1 görev)",
+            " süre   Toplam 1:56:40",
             " görev  1/2 bitti · şu an: T001 RG Do it",
             " kapı   başlangıç BASE · doğrulama VERIFY",
             " oturum 2 bağlı (abc, def)",
@@ -404,6 +405,7 @@ class TestTerminalView(MonitorBase):
             " loop    a loop",
             " loop    b loop",
             " pace    total 1h 56m · per task 6m · review rejects 2 (tasks affected: 1)",
+            " clock   Total 1:56:40",
             " tasks   1/2 done · now: T001 RG Do it",
             " gates   baseline BASE · verify VERIFY",
             " session 2 bound (abc, def)",
@@ -427,8 +429,8 @@ class TestTerminalView(MonitorBase):
         for code, width in (("tr", 8), ("en", 9)):
             with lang(code):
                 lines = MON.render_text([self.view()], color=False, width=120).splitlines()[1:]
-            labelled = [ln for ln in lines if re.match(r" (faz|durum|döngü|tempo|görev|kapı|oturum|token|günlük|"
-                                                       r"phase|status|loop|pace|tasks|gates|session|tokens|ledger) ", ln)]
+            labelled = [ln for ln in lines if re.match(r" (faz|durum|döngü|tempo|süre|görev|kapı|oturum|token|günlük|"
+                                                       r"phase|status|loop|pace|clock|tasks|gates|session|tokens|ledger) ", ln)]
             self.assertGreaterEqual(len(labelled), 9, code)
             columns = {len(re.match(r" \S+\s+", ln).group(0)) for ln in labelled}
             self.assertEqual(columns, {width}, f"{code}: labels are not aligned: {columns}")

@@ -955,10 +955,10 @@ class TestRunUsageError(Base):
         en = self.run_cli("run", "ab", "-p", "demo", ORKESTRA_LANG="en")
         tr = self.run_cli("run", "ab", "-p", "demo", ORKESTRA_LANG="tr")
         self.assertEqual((en.returncode, tr.returncode), (2, 2), en.stdout + tr.stdout)
-        self.assertIn('usage: orkestra run [--engine claude|cursor|copilot] [-p <project>] "<request>"', en.stderr)
+        self.assertIn('usage: orkestra run [--engine claude|cursor|copilot|pi] [-p <project>] "<request>"', en.stderr)
         self.assertNotRegex(en.stderr, TR_LETTERS)
         self.assertNotIn("<proje>", en.stderr)
-        self.assertIn('kullanım: orkestra run [--engine claude|cursor|copilot] [-p <proje>] "<istek>"', tr.stderr)
+        self.assertIn('kullanım: orkestra run [--engine claude|cursor|copilot|pi] [-p <proje>] "<istek>"', tr.stderr)
 
 
 class TestDocumentLookups(Base):

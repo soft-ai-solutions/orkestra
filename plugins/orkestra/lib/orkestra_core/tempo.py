@@ -59,6 +59,17 @@ def dur(seconds: Optional[float]) -> str:
     return f"{s // 3600}h{s % 3600 // 60:02d}m"
 
 
+def clock(seconds: Optional[float]) -> str:
+    """Hours:minutes:seconds for a person watching a run. Minutes and seconds are two digits. Hours are not padded
+    and keep growing past 24, so a long run does not lose a day."""
+    if seconds is None:
+        return "?"
+    s = int(max(0, seconds))
+    hours, rest = divmod(s, 3600)
+    minutes, secs = divmod(rest, 60)
+    return f"{hours}:{minutes:02d}:{secs:02d}"
+
+
 def dur_tr(seconds: Optional[float]) -> str:
     """Duration for a human, in the current language (the name is historical: it began as the Turkish formatter,
     `45 sn` · `12 dk` · `2 sa 5 dk`; English reads `45s` · `12m` · `2h 5m`). `dur` stays the fixed form the model reads."""
@@ -492,6 +503,11 @@ def next_action(project: Path, st: Dict[str, Any], deep: bool = True, now: Optio
                                           f"turn (the process would exit and kill them). Wait inside it with ONE blocking call "
                                           f"`orkestra wait {p}` (Bash timeout 600000, no tokens while it waits); do not re-dispatch.",
                            "background subagents report back on their own", agents=pending[:8]))
+        if str(st.get("engine") or "claude") in ("cursor", "copilot", "pi"):
+            # These hosts return a subagent report in the same turn. Ending the turn here is an idle wait.
+            return done(_n("wait_agents", f"{len(pending)} subagent(s) still running ({who}) → the report arrives in this "
+                                          f"turn. Continue from it. Do not poll and do not start the same agent again.",
+                           "the report comes back in this turn", agents=pending[:8]))
         return done(_n("wait_agents", f"{len(pending)} subagent(s) still running ({who}) → END YOUR TURN now; each hand-back "
                                       f"arrives as a message and resumes you. Do not poll, sleep or re-dispatch.",
                        "background subagents report back on their own", agents=pending[:8]))

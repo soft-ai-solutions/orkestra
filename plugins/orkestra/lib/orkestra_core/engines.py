@@ -31,7 +31,7 @@ subprocess = LazyModule("subprocess")
 tempfile = LazyModule("tempfile")
 uuid = LazyModule("uuid")
 
-ENGINES = ("claude", "cursor", "copilot")
+ENGINES = ("claude", "cursor", "copilot", "pi")
 DEFAULT_ENGINE = "claude"
 AGENT_NAMES = ("scout", "researcher", "architect", "plan-critic", "implementer", "reviewer", "adversary", "verifier")
 SKILL_NAMES = ("run", "resume", "status", "onboard", "rollback", "ship")
@@ -39,6 +39,8 @@ SKILL_NAMES = ("run", "resume", "status", "onboard", "rollback", "ship")
 
 CURSOR_SID_PREFIX = "cursor-"    # key of a Cursor conversation in ~/.orkestra/sessions (see session_key)
 COPILOT_SID_PREFIX = "copilot-"
+PI_SID_PREFIX = "pi-"
+_PI_SESSION_SAFE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 class EngineError(Exception):
@@ -51,7 +53,7 @@ def session_key(engine: str, raw_id: str) -> str:
     copy loaded that way must never find (and act on) a Cursor session's binding or git grant."""
     if not raw_id:
         return ""
-    prefix = {"cursor": CURSOR_SID_PREFIX, "copilot": COPILOT_SID_PREFIX}.get(engine)
+    prefix = {"cursor": CURSOR_SID_PREFIX, "copilot": COPILOT_SID_PREFIX, "pi": PI_SID_PREFIX}.get(engine)
     if prefix and not raw_id.startswith(prefix):
         return prefix + raw_id
     return raw_id
@@ -60,7 +62,7 @@ def session_key(engine: str, raw_id: str) -> str:
 def raw_session_id(session_id: str) -> str:
     """What the engine's CLI calls the session (`--resume <id>`)."""
     s = session_id or ""
-    for prefix in (CURSOR_SID_PREFIX, COPILOT_SID_PREFIX):
+    for prefix in (CURSOR_SID_PREFIX, COPILOT_SID_PREFIX, PI_SID_PREFIX):
         if s.startswith(prefix):
             return s[len(prefix):]
     return s
@@ -71,6 +73,8 @@ def session_engine(session_id: str, binding: Optional[Mapping[str, Any]] = None)
         return "cursor"
     if (session_id or "").startswith(COPILOT_SID_PREFIX):
         return "copilot"
+    if (session_id or "").startswith(PI_SID_PREFIX):
+        return "pi"
     try:
         return normalize((binding or {}).get("engine"))
     except EngineError:
@@ -122,7 +126,7 @@ def binary(engine: str, cfg: Optional[Mapping[str, Any]] = None, hint: Optional[
     """Absolute path of the engine's CLI, or None. Order: env override → hint (bridge config) → config → PATH."""
     engine = normalize(engine)
     ecfg = ((cfg or {}).get("engine") or {}).get(engine) or {}
-    names = {"claude": ("claude",), "cursor": ("agent", "cursor-agent"), "copilot": ("copilot",)}[engine]
+    names = {"claude": ("claude",), "cursor": ("agent", "cursor-agent"), "copilot": ("copilot",), "pi": ("pi",)}[engine]
     cands = [os.environ.get(f"ORKESTRA_{engine.upper()}_BIN"), hint, ecfg.get("bin"), *names]
     if engine == "cursor":      # a launchd / cron PATH rarely has the installer's directory
         cands += ["~/.local/bin/agent", "~/.local/bin/cursor-agent", "/usr/local/bin/cursor-agent",
@@ -156,6 +160,52 @@ def new_session(engine: str, bin_path: str, cwd: str) -> str:
     return m.group(0)
 
 
+def _pi_content_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    parts: List[str] = []
+    for part in content:
+        if isinstance(part, str):
+            parts.append(part)
+        elif isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str):
+            parts.append(part["text"])
+    return "".join(parts)
+
+
+def pi_assistant_text(stream: str) -> str:
+    """Last non-empty assistant text in a Pi JSONL stream.
+
+    Records split on LF only. U+2028, U+2029 and U+0085 stay inside JSON strings.
+    A later assistant row with no text does not erase the previous answer.
+    """
+    last = ""
+    text = (stream or "").replace("\r\n", "\n").replace("\r", "\n")
+    for raw in text.split("\n"):
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            rec = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(rec, dict) or rec.get("type") != "message_end":
+            continue
+        message = rec.get("message")
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        got = _pi_content_text(message.get("content"))
+        if got:
+            last = got
+    return last
+
+
+def pi_turn_message(stdout: str) -> str:
+    """What a Pi turn should show. Tool `result` objects are not the answer."""
+    return pi_assistant_text(stdout) or (stdout or "")[-2000:]
+
+
 def headless_command(engine: str, bin_path: str, session_id: str, prompt: str, new: bool,
                      opts: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
     """{"argv": [...], "stdin": text | None} for one non-interactive turn on an existing or new session.
@@ -172,6 +222,20 @@ def headless_command(engine: str, bin_path: str, session_id: str, prompt: str, n
         if o.get("max_budget_usd") and float(o["max_budget_usd"]) > 0:     # opt-in spend ceiling (headless.max_budget_usd)
             argv += ["--max-budget-usd", str(o["max_budget_usd"])]
         return {"argv": argv + [str(x) for x in (o.get("extra_args") or [])], "stdin": prompt}
+    if engine == "pi":
+        # Pi JSON mode: one JSONL stream on stdout, session pinned by --session-id (creates the id when absent).
+        # --extension loads the same file ~/.pi/agent/extensions also discovers, so the tool_call guard runs.
+        text = (prompt or "").replace("\x00", "")
+        if text.lstrip(" \t").startswith("-"):
+            text = "\n" + text
+        sid = _PI_SESSION_SAFE.sub("-", raw_session_id(session_id)).strip("-._")
+        sid = sid or "session"
+        from . import pikit as PK
+        extension = str(o.get("extension") or PK.extension_path())
+        argv = [bin_path, "--mode", "json", "--session-id", sid]
+        if Path(extension).is_file():
+            argv += ["--extension", extension]
+        return {"argv": argv + [str(x) for x in (o.get("extra_args") or [])] + [text], "stdin": None}
     if engine == "copilot":
         argv = [bin_path, "-p", "--output-format", "json", "--allow-all-tools",
                 "--excluded-tools", COPILOT_EXCLUDED_TOOLS]
@@ -200,6 +264,17 @@ def headless_command(engine: str, bin_path: str, session_id: str, prompt: str, n
 def interactive_command(engine: str, bin_path: str, prompt: str, opts: Optional[Mapping[str, Any]] = None) -> List[str]:
     """Open the engine's own interactive terminal UI with the first prompt already submitted."""
     engine, o = normalize(engine), dict(opts or {})
+    if engine == "pi":
+        text = (prompt or "").replace("\x00", "")
+        extra = [str(x) for x in (o.get("interactive_args") or [])]
+        from . import pikit as PK
+        flags = ["--extension", str(o.get("extension") or PK.extension_path())]
+        sid = str(o.get("session_id") or "")
+        if sid:
+            flags = ["--session-id", raw_session_id(sid)] + flags
+        if text.lstrip(" \t").startswith("-"):
+            return [bin_path, *extra, *flags, "--", text]
+        return [bin_path, *extra, *flags, text]
     if engine == "copilot":
         argv = [bin_path, "-i", prompt, "--allow-all-tools", "--excluded-tools", COPILOT_EXCLUDED_TOOLS]
         if o.get("approval_mode", "autopilot") != "manual":
@@ -223,6 +298,9 @@ def interactive_command(engine: str, bin_path: str, prompt: str, opts: Optional[
 def run_prompt(engine: str, request: str) -> str:
     if normalize(engine) == "claude":
         return f"/orkestra:run {request}"
+    if normalize(engine) == "pi":
+        # The installed skill holds the playbook. A short command starts faster than pasting it.
+        return f"/skill:orkestra-run {request}".strip()
     # no reliance on skill discovery: the CLI serves the same instructions the skill carries
     body = ("Orkestra run. First run the shell command `orkestra playbook run` and follow what it prints exactly "
             f"(it is the orkestra-run skill).\n\n{i18n.heading('request')}: {request}")
@@ -234,6 +312,8 @@ def run_prompt(engine: str, request: str) -> str:
 def resume_prompt(engine: str, project_name: str = "") -> str:
     if normalize(engine) == "claude":
         return f"/orkestra:resume {project_name}".rstrip()
+    if normalize(engine) == "pi":
+        return f"/skill:orkestra-resume {project_name}".strip()
     return ("Continue the open Orkestra run. First run the shell command `orkestra resume"
             + (f" -p {project_name}" if project_name else "") + "` and do what its `next` line says "
             "(`orkestra playbook resume` has the procedure).")

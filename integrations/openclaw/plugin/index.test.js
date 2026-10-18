@@ -149,7 +149,7 @@ test("/run in English: usage, engine prefix, start confirmation that routing can
   });
   for (const args of ["", "shop", "../etc do it", "copilot: onlyproject"]) {
     const text = (await commands.run.handler({ args })).text;
-    assert.match(text, /^Usage: \/run \[claude:\|cursor:\|copilot:\] <project> <request>\nExample: \/run copilot: shop/, args);
+    assert.match(text, /^Usage: \/run \[claude:\|cursor:\|copilot:\|pi:\] <project> <request>\nExample: \/run copilot: shop/, args);
   }
   const res = (await commands.run.handler({ args: "copilot: shop add CSV export" })).text;
   assert.equal(res.split("\n")[0], `▶️ Started: [shop] job ${JOB} · copilot`);
@@ -166,7 +166,7 @@ test("/run in English: usage, engine prefix, start confirmation that routing can
 test("/yap in Turkish: same command, Turkish texts", async () => {
   lang("tr");
   const { commands } = harness({ start: () => ok({ id: JOB, project: "shop", engine: "cursor" }) });
-  assert.match((await commands.yap.handler({ args: "" })).text, /^Kullanım: \/yap \[claude:\|cursor:\|copilot:\] <proje> <istek>/);
+  assert.match((await commands.yap.handler({ args: "" })).text, /^Kullanım: \/yap \[claude:\|cursor:\|copilot:\|pi:\] <proje> <istek>/);
   const res = (await commands.yap.handler({ args: "cursor: shop sipariş listesine CSV ekle" })).text;
   assert.equal(res.split("\n")[0], `▶️ Başladım: [shop] iş ${JOB} · cursor`);
   assert.match(res, /Varsayılan autopilot/);

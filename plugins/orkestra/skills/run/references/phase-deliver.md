@@ -13,7 +13,9 @@ Goal: the user gets the value, the proof, and a project that remembers.
    - `orkestra memory feature-add -p <project> --title "<title>" --summary "<one line value>" --capabilities "<cap1,cap2>"`
    - Living specs: for each capability touched, update `.orkestra/memory/specs/<capability>.md` to describe the CURRENT behavior (merge, don't append history; ≤ 80 lines each).
    - `orkestra memory decision "<decision — why — cost if wrong>"` for real architectural choices only.
-   - `orkestra memory learn "<lesson — evidence>"` only if forgetting it would plausibly repeat a mistake.
+   - `orkestra memory learn "<lesson — evidence>"` only for a mistake the finish step does not already record.
+     `orkestra phase next` indexes the run: a feature row when this run has none, plus blocked-task notes and
+     triage rows marked fix and done. The next run's `orkestra start` prints the lessons whose words match the request.
    - If PROJECT.md is now wrong (new command, new structure), fix the affected lines.
 5. `orkestra phase next` → done. Moving to `done` automatically removes regenerable tool dumps under the project
    (`test-results`, `playwright-report`, `android/**/build`, …). Manual: `orkestra clean -p <project>` (or

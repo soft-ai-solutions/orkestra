@@ -128,21 +128,22 @@ python install.py --dry-run
 Bir run'ı onu başlatan motor sürer. Terminal varsayılanı Claude Code'dur; Cursor ve Copilot run'ları motorlarını run
 durumunda taşır ve yarım kalan run'ı başlatan motor sürdürür.
 
-| | Claude Code | Cursor | GitHub Copilot |
-| --- | --- | --- | --- |
-| Sohbette | `/orkestra:run <istek>` | `/orkestra-run <istek>` | `/orkestra:run <istek>` |
-| Terminalden | `orkestra run -p <proje> "<istek>"` | `orkestra run --engine cursor -p <proje> "<istek>"` | `orkestra run --engine copilot -p <proje> "<istek>"` |
-| Telegram'dan | `/yap <proje> <istek>` | `/yap cursor <proje> <istek>` | `/yap copilot: <proje> <istek>` |
-| Bridge API | `{"project": …, "request": …}` | `"engine": "cursor"` ekle | `"engine": "copilot"` ekle |
-| Durum, devam | `/orkestra:status`, `/orkestra:resume` | `/orkestra-status`, `/orkestra-resume` | `/orkestra:status`, `/orkestra:resume` |
-| Bir run'ın dosya değişikliklerini geri al | `/orkestra:rollback` | `/orkestra-rollback` | `/orkestra:rollback` |
-| Commit ve push (yalnız sen çağırırsın) | `/orkestra:ship` | `/orkestra-ship` | `/orkestra:ship` |
+| | Claude Code | Cursor | GitHub Copilot | Pi |
+| --- | --- | --- | --- | --- |
+| Sohbette | `/orkestra:run <istek>` | `/orkestra-run <istek>` | `/orkestra:run <istek>` | `/skill:orkestra-run <istek>` |
+| Terminalden | `orkestra run -p <proje> "<istek>"` | `orkestra run --engine cursor -p <proje> "<istek>"` | `orkestra run --engine copilot -p <proje> "<istek>"` | `orkestra run --engine pi -p <proje> "<istek>"` |
+| Telegram'dan | `/yap <proje> <istek>` | `/yap cursor <proje> <istek>` | `/yap copilot: <proje> <istek>` | `/yap pi: <proje> <istek>` |
+| Bridge API | `{"project": …, "request": …}` | `"engine": "cursor"` ekle | `"engine": "copilot"` ekle | `"engine": "pi"` ekle |
+| Durum, devam | `/orkestra:status`, `/orkestra:resume` | `/orkestra-status`, `/orkestra-resume` | `/orkestra:status`, `/orkestra:resume` | `/skill:orkestra-status`, `/skill:orkestra-resume` |
+| Bir run'ın dosya değişikliklerini geri al | `/orkestra:rollback` | `/orkestra-rollback` | `/orkestra:rollback` | `/skill:orkestra-rollback` |
+| Commit ve push (yalnız sen çağırırsın) | `/orkestra:ship` | `/orkestra-ship` | `/orkestra:ship` | `/skill:orkestra-ship` |
 
 - **Claude Code**: `orkestra setup` eklentinin bir kopyasını `~/.claude/plugins/cache/` altına kurar; `git pull` sonrası sürümü yükseltip `orkestra setup` komutunu yeniden çalıştır, yoksa önbellekteki kopya çalışmaya devam eder.
 - **Cursor**: `orkestra cursor install` skill ve alt-ajanları `~/.cursor` altına bağlar, girdilerini `~/.cursor/hooks.json`
   dosyasına seninkilere dokunmadan ekler (önce zaman damgalı yedek alır); `orkestra cursor uninstall` tam olarak onları
   kaldırır. Yalnız Orkestra run'ı taşıyan sohbetler denetlenir; her oturum guard'larını tüm Cursor sohbetlerine uygulamak
   için `engine.cursor.global_guards` değerini aç.
+- **Pi**: `orkestra pi install` Orkestra skill'lerini `~/.pi/agent/skills` altına ve araç eklentisini `~/.pi/agent/extensions` altına yazar. `orkestra pi status` ve `orkestra pi uninstall` Cursor kurulum yüzeyiyle aynı işi görür. Eklenti her araç çağrısını Claude ve Cursor ile aynı karardan geçirir. Bağlı bir koşu, tur duracakken sonraki adıma geçer. Sohbette komut `/skill:orkestra-run`. Terminalde `orkestra run --engine pi`, skill'ler ve eklenti kurulmadan açılmaz. Kurulunca Pi'yi tüm playbook metnini yapıştırmadan bu kısa komutla başlatır.
 - **GitHub Copilot** (CLI ve VS Code): `orkestra copilot install` hook girdilerini yazar; Orkestra ajan eklentisini ve
   yaşam döngüsü hook'larını host'ta yine sen etkinleştirirsin. Hook'suz bir Copilot oturumu denetimli run başlatmamalıdır.
   Copilot CLI başlatmalarında varsayılan `gpt-6-luna` ve en yüksek reasoning effort'tur; istekte açıkça yazılan desteklenen
@@ -497,12 +498,8 @@ Orkestra [MIT Lisansı](LICENSE) ile yayımlanır.
 
 Playbook'ları ve ajan istemleri şu projeler referans alınarak yazıldı; bunlardan seçilmiş dosyalar değiştirilmeden, çalışma
 zamanında hiç yüklenmeden, her biri kendi lisansıyla `plugins/orkestra/vendor/` altında tutulur:
-[superpowers](https://github.com/obra/superpowers), [spec-kit](https://github.com/github/spec-kit),
-[BMAD-METHOD](https://github.com/bmad-code-org/BMAD-METHOD), [gsd-core](https://github.com/open-gsd/gsd-core),
-[OpenSpec](https://github.com/Fission-AI/OpenSpec), [humanlayer](https://github.com/humanlayer/humanlayer)
-(Apache-2.0), [compound-engineering-plugin](https://github.com/EveryInc/compound-engineering-plugin),
-[ECC](https://github.com/affaan-m/ECC) ve
-[andrej-karpathy-skills](https://github.com/multica-ai/andrej-karpathy-skills). Telif bildirimleri, sabitlenen commit'ler ve
+[superpowers](https://github.com/obra/superpowers) ve
+[ECC](https://github.com/affaan-m/ECC). Telif bildirimleri, sabitlenen commit'ler ve
 lisans dosyaları: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 Orkestra bağımsız bir projedir. Anthropic, Anysphere (Cursor), GitHub ya da yukarıdaki projelerin hiçbiriyle bağlantılı

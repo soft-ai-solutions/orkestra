@@ -308,6 +308,7 @@ def ui_engines(cfg: Dict[str, Any], project_name: Optional[str] = None) -> Dict[
     claude = EN.binary("claude", orkestra_cfg(), hint=cfg.get("claude_bin") or None)
     cursor_error = cursor_ready(cfg, project)
     copilot_error = copilot_ready(cfg)
+    pi_bin = EN.binary("pi", orkestra_cfg())
     return {
         "default": pick_engine(cfg, None),
         "engines": [
@@ -315,6 +316,8 @@ def ui_engines(cfg: Dict[str, Any], project_name: Optional[str] = None) -> Dict[
              "reason": "" if claude else t("bridge.engine.claude_missing")},
             {"id": "cursor", "label": "Cursor", "available": not bool(cursor_error), "reason": cursor_error},
             {"id": "copilot", "label": "GitHub Copilot", "available": not bool(copilot_error), "reason": copilot_error},
+            {"id": "pi", "label": "Pi", "available": bool(pi_bin),
+             "reason": "" if pi_bin else t("bridge.turn.binary_missing", engine="Pi", binary="pi")},
         ],
     }
 
@@ -432,7 +435,7 @@ def start_job(cfg: Dict[str, Any], project_name: str, request: str, chat_id: Opt
     job["source"] = source
     # Claude/Cursor agents follow the run skill and bind the session. Pre-open so Flows/dashboard show the ask
     # immediately (including advisory). Copilot's headless stub does not drive phase status; leave that path alone.
-    if engine in ("claude", "cursor") and not project_active_run(project):
+    if engine in ("claude", "cursor", "pi") and not project_active_run(project):
         try:
             st = R.open_run_for_request(project, request, engine=engine, mode="headless",
                                         approval_mode=approval_mode)
@@ -441,6 +444,15 @@ def start_job(cfg: Dict[str, Any], project_name: str, request: str, chat_id: Opt
             job["status"], job["last_message"] = "error", str(exc)
             save_job(job)
             raise ValueError(str(exc))
+    if engine == "pi":
+        rid = job.get("run_id") or project_active_run(project)
+        if rid:
+            job["run_id"] = rid
+            from orkestra_core import activity as ACT
+            from orkestra_core import state as ST
+            sid = EN.session_key("pi", str(job.get("session_id") or ""))
+            if ST.bind_session(sid, project, rid, engine="pi"):
+                ACT.record(project, rid, {"session_id": sid}, "bind", "pi session")
     save_job(job)
     run_turn(cfg, job, EN.run_prompt(engine, request + note), new=True, said=f"/orkestra-run {request}{note}")
     return job
@@ -628,6 +640,20 @@ def _prepare_turn(cfg: Dict[str, Any], job: Dict[str, Any], prompt: str, new: bo
                                   selected_model=str(job.get("copilot_model") or ""),
                                   selected_effort=str(job.get("copilot_reasoning_effort") or ""))
         spec = EN.headless_command("copilot", str(binary), job["session_id"], prompt, new, options)
+    elif engine == "pi":
+        binary = EN.binary("pi", OP.global_config())
+        if not binary:
+            job["status"], job["last_message"] = "error", t("bridge.turn.binary_missing", engine="pi", binary="pi")
+            save_job(job)
+            notify(cfg, job)
+            return None
+        from orkestra_core import pikit as PK
+        if not PK.skills_installed() or not PK.guards_installed():
+            job["status"], job["last_message"] = "error", t("cli.pi_skills_required")
+            save_job(job)
+            notify(cfg, job)
+            return None
+        spec = EN.headless_command("pi", binary, job["session_id"], prompt, new, {})
     else:
         binary = str(cfg["claude_bin"])
         spec = EN.headless_command("claude", binary, job["session_id"], prompt, new,
@@ -739,9 +765,14 @@ def _start_turn(cfg: Dict[str, Any], job: Dict[str, Any], prep: Dict[str, Any]) 
             if not isinstance(data, dict):
                 raise ValueError("not an object")
         except ValueError:
-            data = EN.parse_result(out or "")       # noise around the result line (stream-json, warnings)
-            if not data:
-                message = (out or "")[-2000:]
+            if engine == "pi":
+                # JSONL, not one {result} object. A tool event's result must not become the reply.
+                data = {}
+                message = EN.pi_turn_message(out or "")
+            else:
+                data = EN.parse_result(out or "")       # noise around the result line (stream-json, warnings)
+                if not data:
+                    message = (out or "")[-2000:]
         message = str(data.get("result") or "") or message
         if data.get("session_id"):
             fresh["session_id"] = data["session_id"]

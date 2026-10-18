@@ -157,9 +157,20 @@ def set_active_run(project: Path, run_id: Optional[str]) -> None:
 
 
 def project_active_run(project: Path) -> Optional[str]:
-    rid = active_runs().get(str(Path(project)))
+    key = str(Path(project))
+    rid = active_runs().get(key)
     if rid and state_path(project, rid).exists():
-        return rid
+        st = read_json(state_path(project, rid))
+        # Unreadable JSON stays indexed: read_json gives None, a list, or a string, and the check is "not a dict".
+        if not isinstance(st, dict) or st.get("status") not in TERMINAL_STATUSES:
+            return rid
+        # Same lock shape as set_active_run. Do not call it here: flock does not nest, and a newer id must survive.
+        p = paths.active_runs_path()
+        with file_lock(p):
+            data = active_runs()
+            if data.get(key) == rid:
+                data.pop(key, None)
+                write_json_atomic(p, data)
     # fall back to scanning runs/ for an open run (index may be stale or from another machine)
     rdir = paths.runs_dir(project)
     if rdir.is_dir():
@@ -167,7 +178,12 @@ def project_active_run(project: Path) -> Optional[str]:
         for p in rdir.iterdir():
             st = read_json(p / "state.json")
             if isinstance(st, dict) and st.get("status") in OPEN_STATUSES:
-                cands.append((st.get("updated", ""), st["run_id"]))
+                open_id = st.get("run_id")
+                updated = st.get("updated")
+                # A missing id cannot be resumed. A non-string updated must not crash the sort
+                # (a null next to an ISO string raises TypeError and blocks every later start).
+                if isinstance(open_id, str) and open_id:
+                    cands.append((updated if isinstance(updated, str) else "", open_id))
         if cands:
             return sorted(cands)[-1][1]
     return None

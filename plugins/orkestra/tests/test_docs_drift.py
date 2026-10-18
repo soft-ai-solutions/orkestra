@@ -553,7 +553,7 @@ class TestFactsComeFromTheCode(unittest.TestCase):
         for a in run._actions:
             if "--engine" in a.option_strings:
                 choices = set(a.choices)
-        self.assertEqual(choices, {"claude", "cursor", "copilot"})
+        self.assertEqual(choices, {"claude", "cursor", "copilot", "pi"})
         for doc in (README_EN, README_TR):
             for engine in ("cursor", "copilot"):
                 self.assertIn(f"orkestra run --engine {engine}", read(doc))

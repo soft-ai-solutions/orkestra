@@ -177,9 +177,9 @@ class BridgeEnginesTest(unittest.TestCase):
         msg = yap("/yap cursor öncelik ekle; ben karar verici olayım")  # a project that is itself called "cursor"
         self.assertIn("Başladım: [cursor]", msg)
         self.assertNotIn("· cursor", msg)
-        self.assertIn("/yap claude:|cursor:|copilot: <proje> <istek>", yap("/yap cursor: demo6"))
+        self.assertIn("/yap claude:|cursor:|copilot:|pi: <proje> <istek>", yap("/yap cursor: demo6"))
         self.assertIn("Başlatılamadı", yap("/yap cursor: nope bir şey yap"))
-        self.assertIn("/yap claude:|cursor:|copilot:", yap("/yardim"))
+        self.assertIn("/yap claude:|cursor:|copilot:|pi:", yap("/yardim"))
         code, listing = self.call("GET", "/jobs?chat_id=42")
         engines = {j["project"]: j["engine"] for j in listing["jobs"]}
         for project, engine in (("demo2", "cursor"), ("demo3", "cursor"), ("demo4", "claude"), ("demo5", "claude"),

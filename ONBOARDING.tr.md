@@ -94,10 +94,17 @@ orkestra cursor install       # ~/.cursor altında skill ve alt-ajanlar, hook gi
 orkestra cursor status
 orkestra copilot install      # Copilot hook'ları $COPILOT_HOME (ya da ~/.copilot) altında
 orkestra copilot status
+orkestra pi install           # skill'ler ~/.pi/agent/skills altında
+orkestra pi status
 ```
 
 `cursor install --dry-run` neyi değiştireceğini gösterir; `--copy` bağlamak yerine kopyalar. `cursor uninstall` yalnız
 eklediği girdileri kaldırır ve önce `hooks.json` için zaman damgalı bir yedek alınır.
+
+`pi install --dry-run`, `~/.pi/agent/skills` altına yazacağı skill dosyalarını ve `~/.pi/agent/extensions` altına
+yazacağı eklentiyi gösterir. `pi uninstall` yalnız işaretlediği dizinleri ve eklentiyi kaldırır. Eklenti, bağlı
+bir koşuda araç çağrılarını denetler. Skill'ler ve eklenti kurulunca `orkestra run --engine pi`, Pi'yi
+`/skill:orkestra-run` ile başlatır.
 
 ### Copilot host'unda etkinleştirme (elle)
 

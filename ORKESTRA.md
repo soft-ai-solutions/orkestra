@@ -293,7 +293,7 @@ kicks in once a run is started. First setup: `orkestra setup` (or `cursor instal
 ## Coordination
 
 Three agents update this folder: orkestra-core (the plugin and the bridge), openclaw-agent (`integrations/openclaw/`),
-ecc-karpathy (`vendor/ecc`, `vendor/karpathy`, optional playbooks, this document). The rules are in `CONTRIBUTING.md`;
+ecc (`vendor/ecc`, optional playbooks, this document). The rules are in `CONTRIBUTING.md`;
 the most important ones: no plugin file is changed while a run is open; a backup and an md5 are taken before a change,
 the work is done in a separate copy and the tests run there, then it is transferred to the live folder in one go;
 commit, push and branch happen only at the explicit request of the human user / repository owner.

@@ -18,7 +18,7 @@ A task brief (from `orkestra brief <TID>`) with: task, files, acceptance, test c
 
 ## Protocol (do not skip steps)
 
-1. Read only what the task needs: the files listed, the patterns cited, the tests nearby.
+1. Read only what the task needs: the files listed, the patterns cited, the tests nearby. Before you add a new file or helper, search the project. If one already does the job, extend it.
 2. **RED** — write/extend the test for the acceptance criteria. Run it through the CLI so the failure is recorded:
    `orkestra tdd red <TID> -p <project> -- <narrow test command>` → must fail for the RIGHT reason (assertion, missing symbol), not a typo/import/config error. Fix the test until it fails correctly.
 3. **GREEN** — write the minimal production code that satisfies the test, following existing patterns.

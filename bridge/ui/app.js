@@ -468,8 +468,10 @@ function agentProfile(name) {
 }
 
 function flowGate(label, value) {
+  const text = typeof value === "string" ? value : "";
+  const shown = text === "" || text === "\u2014" ? t("flowcard.gate_none") : text;
   const gate = flowElement("div", "flow-gate");
-  gate.append(flowElement("span", "", label), flowElement("b", "", value || "—"));
+  gate.append(flowElement("span", "", label), flowElement("b", "", shown));
   return gate;
 }
 
@@ -667,8 +669,8 @@ function buildFlowCard(run) {
   const gates = run.gates || {};
   gateRow.append(
     flowGate(t("flowcard.gate_approval"), approval),
-    flowGate(t("flowcard.gate_baseline"), gates.baseline || "—"),
-    flowGate(t("flowcard.gate_regression"), gates.verify || "—"),
+    flowGate(t("flowcard.gate_baseline"), gates.baseline),
+    flowGate(t("flowcard.gate_regression"), gates.verify),
   );
   inner.append(gateRow);
 
@@ -763,7 +765,15 @@ async function refreshJobs() {
     const when = new Date();
     bind("jobs-updated", () => t("jobs.updated", { time: when.toLocaleTimeString(locale()) }));
   } catch (error) {
-    bind("jobs-updated", () => error.message);
+    bind("jobs-updated", () => t("jobs.refresh_failed"));
+    const list = $("jobs-list");
+    if (!list.querySelector(".job-card")) {
+      list.replaceChildren();
+      const empty = document.createElement("div");
+      empty.className = "empty-state";
+      empty.textContent = t("jobs.refresh_failed");
+      list.append(empty);
+    }
     if (error.message.includes("unauthorized")) setStatus("status.bad_token");
   } finally {
     state.polling = false;

@@ -9,7 +9,7 @@ Goal: compact, verified project memory so every later run starts informed and ch
    - focus "stack, entry points, structure, build/run commands"
    - focus "conventions (naming, state, errors, i18n, styling) and testing (framework, location, how to run one test)"
    - focus "integrations, data stores, env var names, deploy target, known fragile areas" (M/L projects)
-4. Write `.orkestra/memory/PROJECT.md` (template already there): summary block first (it is what every run reads), ≤ 120 lines, every claim verified against the code.
+4. `orkestra init` already wrote `.orkestra/memory/PROJECT.md` from files that exist (stack, entry points, top-level directories, test directories, gate names, env var names). It leaves purpose, deploy, conventions and concerns as `unknown` when those files do not say them. Do not invent those. You may replace an `unknown` only with a sentence copied from a file you opened, and the line must cite that file in backticks. FEATURES, DECISIONS and LEARNINGS stay empty until a real run records them. Then `orkestra memory check -p <project>` must print `memory check: OK`.
 5. Gates: verify the detected commands against package scripts / AGENTS.md; fix `.orkestra/config.json` if needed; run `orkestra gate run -p <project>` only if quick; `orkestra gate confirm`.
    Optional per-gate fields in `.orkestra/config.json` (all off by default):
    - `"idle_timeout": N` kills a gate that prints nothing for N seconds (recommended `300` for `kind: "e2e"`; leave it off for silent builds).

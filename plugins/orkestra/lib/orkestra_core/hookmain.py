@@ -298,9 +298,11 @@ def run_summary(project: Path, st: dict) -> str:
     done = sum(1 for t in tasks.values() if t.get("status") in ("done", "deferred"))
     prog = f" · tasks {done}/{len(tasks)}" if tasks else ""
     hint = next_hint(project, st)
-    return (f"[orkestra] Active run {st['run_id']} \"{st.get('title', '')}\" in {project} — phase {st['phase']}, "
-            f"status {st['status']}{prog}. State lives in files, not in your memory: run `orkestra context -p {project}` "
-            f"and `orkestra playbook {st['phase']}` before continuing." + (f"\n{hint}" if hint else ""))
+    # The next hint already names the one command. Asking for a full context dump and the phase playbook on every
+    # resume made the model re-read both.
+    text = (f"[orkestra] Active run {st['run_id']} \"{st.get('title', '')}\" in {project} — phase {st['phase']}, "
+            f"status {st['status']}{prog}.")
+    return text + (f"\n{hint}" if hint else f" Next: `orkestra next -p {project}`.")
 
 
 # ---------------------------------------------------------------- events
@@ -1059,6 +1061,14 @@ def extract_answers(ev: dict) -> list:
     return found
 
 
+class _StopCap(Exception):
+    """The Stop nudge cap is already spent.
+
+    Raised inside StateTxn before any mutation so a clean return cannot save_state. on_stop records the idle
+    row only after the transaction has closed, leaving state.json mtime at or behind that row.
+    """
+
+
 def on_stop(ev: dict) -> None:
     b = binding_for(ev)
     if not b:
@@ -1098,7 +1108,8 @@ def on_stop(ev: dict) -> None:
         return
     cfg = paths.global_config()
     headless = paths.is_headless(st)        # also true for an interactive run the bridge / watchdog continues
-    if (cfg.get("tempo") or {}).get("stop_while_agents", True) and not headless:
+    if (cfg.get("tempo") or {}).get("stop_while_agents", True) and not headless \
+            and str(st.get("engine") or "claude") != "pi":
         wd = tempo.wd_cfg(cfg)
         pending, _lost = tempo.live_agents(project, st["run_id"], wd=wd)    # lost = registered, no sign of life
         if pending:
@@ -1114,20 +1125,25 @@ def on_stop(ev: dict) -> None:
         if due:
             activity.record(project, st["run_id"], ev, "wait_agents", _t("dispatch.wait_report", count=len(due)))
             return
-    with ST.StateTxn(project, b["run_id"]) as s:
-        sb = s.setdefault("stop_blocks", {})
-        key = progress_key(ev, s)
-        now = time.time()
-        recent = [float(x) for x in (sb.get("_nudges") or []) if isinstance(x, (int, float)) and now - float(x) <= STOP_NUDGE_WINDOW]
-        count = int(sb.get(key, 0))
-        if count >= MAX_STOP_BLOCKS_PER_PROMPT or len(recent) >= STOP_NUDGE_CEILING:
-            idle(_t("dispatch.turn_nudge_limit"))
-            return
-        sb[key] = count + 1
-        sb["_nudges"] = recent + [now]
-        if len([k for k in sb if k != "_nudges"]) > 50:     # keep the dict small (newest progress states only)
-            kept = [(k, v) for k, v in sb.items() if k != "_nudges"][-20:]
-            s["stop_blocks"] = dict(kept, _nudges=sb["_nudges"])
+    try:
+        with ST.StateTxn(project, b["run_id"]) as s:
+            raw = s.get("stop_blocks")
+            sb = raw if isinstance(raw, dict) else {}
+            key = progress_key(ev, s)
+            now = time.time()
+            recent = [float(x) for x in (sb.get("_nudges") or []) if isinstance(x, (int, float)) and now - float(x) <= STOP_NUDGE_WINDOW]
+            count = int(sb.get(key, 0))
+            if count >= MAX_STOP_BLOCKS_PER_PROMPT or len(recent) >= STOP_NUDGE_CEILING:
+                raise _StopCap()
+            live = s.setdefault("stop_blocks", {})
+            live[key] = count + 1
+            live["_nudges"] = recent + [now]
+            if len([k for k in live if k != "_nudges"]) > 50:     # keep the dict small (newest progress states only)
+                kept = [(k, v) for k, v in live.items() if k != "_nudges"][-20:]
+                s["stop_blocks"] = dict(kept, _nudges=live["_nudges"])
+    except _StopCap:
+        idle(_t("dispatch.turn_nudge_limit"))
+        return
     hint = next_hint(project, st, activity.read_rows(project, st["run_id"]))
     no_user = headless or st.get("approval_mode", "autopilot") != "manual"      # nobody to ask: AskUserQuestion is denied
     if no_user:
@@ -1140,7 +1156,8 @@ def on_stop(ev: dict) -> None:
                        f"explain.")
     emit({"decision": "block", "reason":
           f"[orkestra] Run {st['run_id']} is still in phase '{st['phase']}' (status active)"
-          + ("" if headless else " and no subagent is running") + ": do not end the turn mid-run.\n"
+          + ("" if headless or str(st.get("engine") or "") == "pi" else " and no subagent is running")
+          + ": do not end the turn mid-run.\n"
           + (hint + "\n" if hint else f"Continue with `orkestra next -p {project}`.\n")
           + wait_advice + f" If the user changed topic and this chat drives the run, run `orkestra pause -p {project}` first."})
     activity.record(project, st["run_id"], ev, "nudge", _t("dispatch.nudge_early_stop"))

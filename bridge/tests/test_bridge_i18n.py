@@ -235,7 +235,7 @@ class TestLanguageResolution(Sandbox):
 
     def test_default_is_english(self):
         self.assertEqual(B.usage(), i18n.catalog("en")["bridge.usage"])
-        self.assertIn("/run claude:|cursor:|copilot: <project> <request>", B.usage())
+        self.assertIn("/run claude:|cursor:|copilot:|pi: <project> <request>", B.usage())
 
     def test_a_config_change_reaches_a_running_bridge_without_a_restart(self):
         self.assertIn("/run <project>", B.usage())
@@ -282,12 +282,12 @@ class TestChatCommands(Sandbox):
 
     def test_usage_in_both_languages(self):
         en, tr = self.say("en", "/help"), self.say("tr", "/help")
-        self.assertIn("/run claude:|cursor:|copilot: <project> <request>", en)
+        self.assertIn("/run claude:|cursor:|copilot:|pi: <project> <request>", en)
         self.assertIn("/status", en)
         self.assertIn("/cancel", en)
         self.assertIn("The Turkish names work too: /yap, /durum, /iptal.", en)
         self.assertIsNone(TR_LETTERS.search(en))
-        self.assertIn("/yap claude:|cursor:|copilot: <proje> <istek>", tr)
+        self.assertIn("/yap claude:|cursor:|copilot:|pi: <proje> <istek>", tr)
         self.assertIn("/durum", tr)
         self.assertIn("/iptal", tr)
         self.assertIn("İngilizce karşılıkları da çalışır: /run, /status, /cancel.", tr)
@@ -401,8 +401,8 @@ class TestMessages(Sandbox):
             with self.assertRaises(ValueError) as raised:
                 B.pick_engine(self.cfg, "gemini")
             return str(raised.exception)
-        self.assertBoth(unknown_engine, "unknown engine: 'gemini' (choices: claude, cursor, copilot)",
-                        "bilinmeyen motor: 'gemini' (seçenekler: claude, cursor, copilot)")
+        self.assertBoth(unknown_engine, "unknown engine: 'gemini' (choices: claude, cursor, copilot, pi)",
+                        "bilinmeyen motor: 'gemini' (seçenekler: claude, cursor, copilot, pi)")
 
     def test_project_list_errors_are_written_in_the_current_language(self):
         """The local UI shows these verbatim: they came out English on a Turkish page."""
@@ -823,7 +823,7 @@ class TestSubprocessCli(unittest.TestCase):
         cp = self.run_py(CLIENT, [], "en")
         self.assertEqual(cp.returncode, 2)
         self.assertIn("Tiny client for the Orkestra bridge", cp.stdout)
-        self.assertIn("--engine claude|cursor|copilot", cp.stdout)
+        self.assertIn("--engine claude|cursor|copilot|pi", cp.stdout)
         self.assertIsNone(TR_LETTERS.search(cp.stdout))
         cp = self.run_py(CLIENT, ["--help"], "tr")
         self.assertEqual(cp.returncode, 2)
@@ -1270,8 +1270,9 @@ class TestUiTables(unittest.TestCase):
                       "verifier", "ana"):
             self.assertIn(f"agent.{agent}", self.en)
             self.assertIn(f"agent.{agent}.desc", self.en)
-        for engine in ("claude", "cursor", "copilot"):
+        for engine in ("claude", "cursor", "copilot", "pi"):
             self.assertIn(f"engine.{engine}", self.en)
+            self.assertEqual(self.en[f"engine.{engine}"], self.tr[f"engine.{engine}"])
 
     def test_the_page_default_is_the_english_table(self):
         """index.html is the no-script fallback: its text equals the English table, so the two cannot drift apart."""

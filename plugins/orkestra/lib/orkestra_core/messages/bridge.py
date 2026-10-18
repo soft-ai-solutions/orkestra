@@ -28,7 +28,7 @@ EN: Dict[str, str] = {
     "bridge.usage": (
         "Orkestra commands:\n"
         "/run <project> <request> · start a new job (default engine)\n"
-        "/run claude:|cursor:|copilot: <project> <request> · pick the engine explicitly\n"
+        "/run claude:|cursor:|copilot:|pi: <project> <request> · pick the engine explicitly\n"
         "/status · jobs + live status (which job is where)\n"
         "/cancel · stop the latest job\n"
         "Any other message is sent as the answer to the job waiting for you (for example \"approve\").\n"
@@ -169,7 +169,7 @@ EN: Dict[str, str] = {
     "bridge.client.help": (
         "Tiny client for the Orkestra bridge (OpenClaw tools, shell scripts, cron, Shortcuts over SSH ...)\n"
         "\n"
-        "  orkestra_client.py start <project> <request...> [--chat-id ID] [--source openclaw] [--engine claude|cursor|copilot]\n"
+        "  orkestra_client.py start <project> <request...> [--chat-id ID] [--source openclaw] [--engine claude|cursor|copilot|pi]\n"
         "  orkestra_client.py reply <job-id> <text...>\n"
         "  orkestra_client.py reply --chat-id ID <text...>    the job of that chat waiting for an answer\n"
         "  orkestra_client.py status [<job-id>] [--chat-id ID]\n"
@@ -211,7 +211,7 @@ TR: Dict[str, str] = {
     "bridge.usage": (
         "Orkestra komutları:\n"
         "/yap <proje> <istek> · yeni iş başlat (varsayılan engine)\n"
-        "/yap claude:|cursor:|copilot: <proje> <istek> · engine'i açıkça seç\n"
+        "/yap claude:|cursor:|copilot:|pi: <proje> <istek> · engine'i açıkça seç\n"
         "/durum · işler + canlı durum (hangi iş nerede)\n"
         "/iptal · son işi durdur\n"
         "Diğer her mesaj, seni bekleyen işe yanıt olarak gider (ör. \"onay\").\n"
@@ -352,7 +352,7 @@ TR: Dict[str, str] = {
     "bridge.client.help": (
         "Orkestra bridge için küçük istemci (OpenClaw araçları, kabuk betikleri, cron, SSH üzerinden Kısayollar ...)\n"
         "\n"
-        "  orkestra_client.py start <proje> <istek...> [--chat-id ID] [--source openclaw] [--engine claude|cursor|copilot]\n"
+        "  orkestra_client.py start <proje> <istek...> [--chat-id ID] [--source openclaw] [--engine claude|cursor|copilot|pi]\n"
         "  orkestra_client.py reply <iş-id> <metin...>\n"
         "  orkestra_client.py reply --chat-id ID <metin...>    o sohbette yanıt bekleyen iş\n"
         "  orkestra_client.py status [<iş-id>] [--chat-id ID]\n"

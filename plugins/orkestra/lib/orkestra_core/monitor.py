@@ -190,9 +190,11 @@ def _driving_engine(project: Path, run_id: str, stored: str) -> str:
             identified = "cursor"
         elif sid.startswith("copilot-"):
             identified = "copilot"
+        elif sid.startswith("pi-"):
+            identified = "pi"
         else:
             eng = str(data.get("engine") or "")
-            identified = eng if eng in ("claude", "cursor", "copilot") else ""
+            identified = eng if eng in ("claude", "cursor", "copilot", "pi") else ""
         if hb >= newest_hb:
             found, newest_hb, newest_engine = True, hb, identified
     if not found:
@@ -1095,7 +1097,7 @@ def _dur(sec: Optional[float]) -> str:
 
 
 ROW_LABELS = tuple(f"monitor.label_{name}" for name in
-                   ("phase", "status", "loop", "pace", "tasks", "gates", "sessions", "tokens", "ledger"))
+                   ("phase", "status", "loop", "pace", "clock", "tasks", "gates", "sessions", "tokens", "ledger"))
 
 
 def _label_width() -> int:
@@ -1142,6 +1144,31 @@ def _tok(n: Any) -> str:
     if n < 1000:
         return str(n)
     return f"{n / 1000:.1f}K" if n < 1_000_000 else f"{n / 1_000_000:.2f}M"
+
+
+def _clock_body(v: Dict[str, Any]) -> str:
+    """Total and per-phase `H:MM:SS` for the watch row. Empty when the run has no elapsed time and no phase seconds."""
+    tmg = v.get("timing") or {}
+    try:
+        run = int(tmg.get("run") or 0)
+    except (TypeError, ValueError):
+        run = 0
+    phases = tmg.get("phases") if isinstance(tmg.get("phases"), dict) else {}
+    parts = []
+    for name in PHASES:
+        if name not in phases:
+            continue
+        try:
+            seconds = int(phases[name])
+        except (TypeError, ValueError):
+            continue
+        parts.append(f"{i18n.t('monitor.phase_' + name)} {T.clock(seconds)}")
+    if run <= 0 and not parts:
+        return ""
+    total = T.clock(run)
+    if parts:
+        return i18n.t("monitor.ui_clock", total=total, phases=" · ".join(parts))
+    return i18n.t("monitor.ui_clock_total", total=total)
 
 
 def render_text(views: List[Dict[str, Any]], color: bool = False, width: Optional[int] = None) -> str:
@@ -1192,6 +1219,9 @@ def render_text(views: List[Dict[str, Any]], color: bool = False, width: Optiona
             if tmg.get("reopens"):
                 bits.append(i18n.t("monitor.pace_rejects", n=tmg["reopens"], tasks=tmg["tasks_reopened"]))
             out.append(c("2", cut(row("monitor.label_pace") + " · ".join(bits), width)))
+        clock_body = _clock_body(v)
+        if clock_body:
+            out.append(c("2", cut(row("monitor.label_clock") + clock_body, width)))
         if v["tasks_total"]:
             cur = v["current_tasks"]
             cur_txt = " · " + i18n.t("monitor.tasks_now", list="; ".join(f"{t['id']} {t['evidence']} {t['title']}"
@@ -1272,6 +1302,7 @@ UI_KEYS = (
     "monitor.label_pace", "monitor.label_tokens", "monitor.label_ledger",
     "monitor.pace_total", "monitor.pace_per_task", "monitor.pace_rejects", "monitor.tasks_done", "monitor.gates_line",
     "monitor.tokens", "monitor.tokens_context", "monitor.tokens_final", "monitor.in_phase_for",
+    "monitor.ui_clock", "monitor.ui_clock_total",
     "monitor.guard", "monitor.guard_n", "monitor.guard_what", "monitor.guard_general",
     "monitor.phase_intake", "monitor.phase_discover", "monitor.phase_clarify", "monitor.phase_plan",
     "monitor.phase_approve", "monitor.phase_implement", "monitor.phase_verify", "monitor.phase_review",
@@ -1502,7 +1533,7 @@ html{--bar-h:56px}}
 .seg a{padding:13px 14px}.fchip{min-height:44px}.btn,.tog,.more,.compact,summary{min-height:44px}#q{min-height:44px}
 .older{min-height:44px}}
 @media (max-width:600px){
-#q{width:100%;flex:1 1 100%}.older{margin-left:0}#conn-retry{display:none}
+#q{width:100%;flex:1 1 100%}.older{margin-left:0}#conn[data-state="live"] #conn-retry,#conn[data-state="offline"] #conn-retry{display:none}
 .fr{grid-template-columns:auto minmax(0,1fr)}.fr time{grid-column:2;grid-row:1;text-align:right}
 .compact{grid-template-columns:auto minmax(0,1fr)}.compact .badge{grid-row:1;grid-column:1}
 .compact .nm{grid-column:1/-1;grid-row:2}.compact .sub{grid-row:3}.compact .age{grid-row:4;grid-column:1/-1;text-align:left}
@@ -1571,6 +1602,18 @@ function show(n,on){if(n.hidden!==!on)n.hidden=!on;}
 function lsGet(k){try{return localStorage.getItem(k);}catch(e){return null;}}
 function lsSet(k,v){try{localStorage.setItem(k,v);}catch(e){}}
 function tk(n){n=n||0;return n<1000?String(n):n<1e6?(n/1e3).toFixed(1)+"K":(n/1e6).toFixed(2)+"M";}
+function hms(s){s=Math.max(0,s|0);return Math.floor(s/3600)+":"+pad(Math.floor(s%3600/60))+":"+pad(s%60);}
+function clockLine(v){
+ const spent={};
+ (v.phase_history||[]).forEach(h=>{if(h&&h.phase)spent[h.phase]=(spent[h.phase]||0)+(h.seconds||0);});
+ const open=v.status!=="done"&&v.status!=="aborted";
+ const extra=open&&v.now?Math.max(0,Math.floor(nowS()-v.now)):0;
+ const parts=[];
+ PH.forEach(p=>{if(spent[p]==null)return;parts.push(L["phase_"+p]+" "+hms(spent[p]+(p===v.phase?extra:0)));});
+ const base=(v.timing&&v.timing.run)|0;
+ if(!base&&!parts.length)return "";
+ const total=hms(base+extra);
+ return parts.length?fmt(L.ui_clock,{total:total,phases:parts.join(" \u00b7 ")}):fmt(L.ui_clock_total,{total:total});}
 function dur(s){s=Math.max(0,s|0);if(s<60)return fmt(L.dur_s,{n:s});if(s<3600)return fmt(L.dur_m,{n:Math.floor(s/60)});
  let h=Math.floor(s/3600);const m=Math.floor(s%3600/60);
  if(h<24)return m?fmt(L.dur_hm,{h:h,m:m}):fmt(L.dur_h,{h:h});
@@ -1724,7 +1767,8 @@ function newCard(key,inItem){
  // phase stepper
  const steps=el("div","p-steps");r.ol=el("ol","steps");r.ol.setAttribute("aria-hidden","true");     // the line below says the same in words
  r.lis=PH.map(()=>el("li"));r.lis.forEach(li=>r.ol.append(li));
- r.pl=el("p","pl");r.plMain=el("b");r.plSince=el("time");r.pl.append(r.plMain,r.plSince);steps.append(r.ol,r.pl);
+ r.pl=el("p","pl");r.plMain=el("b");r.plSince=el("time");r.pl.append(r.plMain,r.plSince);
+ r.clk=el("time","clk");steps.append(r.ol,r.pl,r.clk);
  // tasks
  const tasks=el("div","p-tasks");r.tbar=el("div","tbar");r.tbar.setAttribute("role","img");
  r.tbD=el("i","d");r.tbP=el("i","p");r.tbB=el("i","b");r.tbar.append(r.tbD,r.tbP,r.tbB);
@@ -1791,7 +1835,12 @@ function patchSteps(st,v,a){
  if(v.phase_since&&v.status!=="done"){
   if(!st.phRec)st.phRec=bind(st,"steps",r.plSince,v.phase_since,null);
   st.phRec.off=false;st.phRec.ts=v.phase_since;st.phRec.fn=ts=>" \u00b7 "+fmt(L.in_phase_for,{dur:dur(nowS()-ts)});paintTime(st.phRec);
- }else{if(st.phRec)st.phRec.off=true;setText(r.plSince,"");}}
+ }else{if(st.phRec)st.phRec.off=true;setText(r.plSince,"");}
+ const line=clockLine(v);
+ show(r.clk,!!line);
+ if(!st.clkRec)st.clkRec=bind(st,"steps",r.clk,v.now||0,()=>clockLine(st.v||v));
+ st.clkRec.off=!line;st.clkRec.ts=v.now||0;st.clkRec.fn=()=>clockLine(st.v||v);
+ if(line)paintTime(st.clkRec);else setText(r.clk,"");}
 
 function taskCounts(v){
  const c=v.tasks_by_status;if(c)return c;

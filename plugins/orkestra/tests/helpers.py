@@ -192,7 +192,7 @@ class Sandbox(unittest.TestCase):
         self.ws.mkdir()
         # the suite may be started from inside an agent's shell (Claude Code / Cursor): the CLI must not see that
         agent_env = ("CLAUDECODE", "CURSOR_AGENT", "CURSOR_CONVERSATION_ID", "ORKESTRA_CURSOR_HOME", "ORKESTRA_SHIM_DIR",
-                     "ORKESTRA_CURSOR_BIN", "ORKESTRA_CLAUDE_BIN", "CLAUDE_CONFIG_DIR")
+                     "ORKESTRA_CURSOR_BIN", "ORKESTRA_CLAUDE_BIN", "CLAUDE_CONFIG_DIR", "ORKESTRA_PI_HOME")
         self._env_backup = {k: os.environ.get(k) for k in ("ORKESTRA_HOME", "ORKESTRA_WORKSPACE", "ORKESTRA_PROJECT",
                                                            "ORKESTRA_HEADLESS", "ORKESTRA_PARALLEL_CLI") + agent_env}
         os.environ["ORKESTRA_PARALLEL_CLI"] = "0"          # unit tests must not spawn a real engine CLI
@@ -203,6 +203,7 @@ class Sandbox(unittest.TestCase):
         for k in agent_env:
             os.environ.pop(k, None)
         os.environ["ORKESTRA_CURSOR_HOME"] = str(self.tmp / "cursor-home")      # never the user's ~/.cursor
+        os.environ["ORKESTRA_PI_HOME"] = str(self.tmp / "pi-home")              # never the user's ~/.pi
         os.environ["ORKESTRA_SHIM_DIR"] = str(self.tmp / "shim-bin")
 
     def tearDown(self) -> None:

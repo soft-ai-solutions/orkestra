@@ -17,6 +17,7 @@ Project path, run folder. Use `orkestra diff -p <project>`, `spec.md` (edge-case
 
 ## Hunt list
 - Every edge-case matrix row: is there a test that actually exercises it? Run the narrow test if cheap.
+- Removed behavior: the old input or state that deleted code used to reject or handle. If the new code does not restore it and the spec does not retire it, that is a finding.
 - Inputs: empty, huge, unicode/Turkish characters (İ/ı), negative/zero, malformed, duplicated, out-of-order.
 - Failure modes: network errors/timeouts, partial writes, retries, offline, permissions denied, missing env var.
 - State: concurrency/races, stale caches, re-entrancy, app backgrounding (mobile), time zones (Europe/Istanbul) and DST.

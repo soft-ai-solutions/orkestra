@@ -114,7 +114,7 @@ export default definePluginEntry({
       agentPromptGuidance: [
         {
           text:
-            "Orkestra: the owner starts runs with /run (or /yap) [claude:|cursor:|copilot:] <project> <request>, checks them with " +
+            "Orkestra: the owner starts runs with /run (or /yap) [claude:|cursor:|copilot:|pi:] <project> <request>, checks them with " +
             "/runs (or /durum), stops them with /cancel (or /iptal) and answers a run by replying (Telegram reply) to its " +
             "notification; the gateway routes all of that without you. In this chat never start, resume, continue or take " +
             "over an orkestra run (no /orkestra:* skills or commands, no orkestra_client.py start/reply, no `orkestra " +
@@ -132,7 +132,7 @@ export default definePluginEntry({
         let project = m[1];
         let request = m[2];
         let engine;
-        const enginePrefix = /^(claude|cursor|copilot):$/i.exec(project);
+        const enginePrefix = /^(claude|cursor|copilot|pi):$/i.exec(project);
         if (enginePrefix) {
           const target = /^\s*(\S+)\s+([\s\S]*\S)\s*$/.exec(request);
           if (!target) {

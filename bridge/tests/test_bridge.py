@@ -159,7 +159,7 @@ class BridgeTest(unittest.TestCase):
         code, engines = self.call("GET", "/engines?project=demo")
         self.assertEqual(code, 200)
         self.assertEqual(engines["default"], "claude")
-        self.assertEqual({item["id"] for item in engines["engines"]}, {"claude", "cursor", "copilot"})
+        self.assertEqual({item["id"] for item in engines["engines"]}, {"claude", "cursor", "copilot", "pi"})
         self.assertTrue(all(isinstance(item["available"], bool) for item in engines["engines"]))
         self.assertEqual(self.call("GET", "/engines?project=../etc")[0], 400)
 
@@ -203,7 +203,7 @@ class BridgeTest(unittest.TestCase):
     def test_4_telegram_command_language(self):
         code, body = self.call("POST", "/telegram", {"chat_id": "42", "text": "/yap"})
         self.assertEqual(code, 200)
-        self.assertIn("/yap claude:|cursor:|copilot:", body["message"])
+        self.assertIn("/yap claude:|cursor:|copilot:|pi:", body["message"])
         code, body = self.call("POST", "/telegram", {"chat_id": "42", "text": "/durum"})
         self.assertEqual(code, 200)
         self.assertIn("Canlı çalışmalar", body["message"])

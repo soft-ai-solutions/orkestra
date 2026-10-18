@@ -291,7 +291,7 @@ başlatıldığında devreye girer. İlk kurulum: `orkestra setup` (veya `cursor
 ## Koordinasyon
 
 Bu klasörü üç agent günceller: orkestra-core (eklenti ve bridge), openclaw-agent (`integrations/openclaw/`),
-ecc-karpathy (`vendor/ecc`, `vendor/karpathy`, isteğe bağlı playbook'lar, bu belge). Kurallar `CONTRIBUTING.md`'de;
+ecc (`vendor/ecc`, isteğe bağlı playbook'lar, bu belge). Kurallar `CONTRIBUTING.md`'de;
 en önemlileri: açık run varken eklenti dosyası değiştirilmez; değişiklikten önce yedek ve md5 alınır, iş ayrı bir
 kopyada yapılıp testler orada koşulur, canlı klasöre tek seferde aktarılır; commit, push ve branch yalnız insan kullanıcı / depo sahibinin açık isteğiyle yapılır.
 

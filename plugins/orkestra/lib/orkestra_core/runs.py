@@ -108,6 +108,8 @@ def init_project(project: Path) -> List[str]:
         cfg = {"gates": G.detect(project), "gates_confirmed": False, "ui": {"kind": "unknown"}, "notes": ""}
         paths.save_project_config(project, cfg)
         created.append(str(cfgp.relative_to(project)))
+    from . import memory as M
+    M.observe(project)
     return created
 
 
@@ -182,7 +184,7 @@ def _start_run_locked(project: Path, title: str, request: str, size: str, mode: 
 
 def record_engine_origin(project: Path, run_id: str, engine: str) -> bool:
     """Correct a run's origin when its host hook identifies it after CLI start."""
-    if engine not in ("claude", "cursor", "copilot"):
+    if engine not in ("claude", "cursor", "copilot", "pi"):
         return False
     project = Path(project)
     with StateTxn(project, run_id) as st:
@@ -335,6 +337,11 @@ def preconditions(project: Path, st: Dict[str, Any], target: str) -> List[str]:
             v = PP.verdict(critic)
             if v not in ("PASS", "PASS_WITH_NOTES"):
                 problems.append("plan-critic verdict missing or not PASS (reviews/plan-critic.md → `VERDICT: PASS`)")
+            # Entering approve only: a critic older than spec.md or plan.md must not be stamped.
+            phase = st.get("phase") or ""
+            if phase in PHASES and PHASES.index(phase) < PHASES.index("approve") \
+                    and not _legacy_plan_review_is_current(project, st):
+                problems.append("plan-critic is missing or older than spec.md or plan.md")
     elif target == "implement":
         appr = read_json(rdir / "approval.json")
         if isinstance(appr, dict) and appr.get("decision") == "reject":
@@ -475,6 +482,17 @@ def _precheck(project: Path, run_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def write_timing(project: Path, st: Dict[str, Any]) -> None:
+    """The clocks of a finished run, in the feature folder. The run is already done; the caller ignores a failure."""
+    tm = T.timings(st)
+    lines = ["# Timing", "", "- " + i18n.t("monitor.ui_clock_total", total=T.clock(tm["run"]))]
+    for name in PHASES:
+        if name not in tm["phases"]:
+            continue
+        lines.append(f"- {i18n.t('monitor.phase_' + name)}: {T.clock(int(tm['phases'][name]))}")
+    write_text_atomic(paths.feature_dir(project, st["run_id"]) / "timing.md", "\n".join(lines) + "\n")
+
+
 def phase_next(project: Path, run_id: str, note: str = "") -> Tuple[str, str]:
     pre = _precheck(project, run_id)
     with StateTxn(project, run_id) as st:
@@ -535,6 +553,15 @@ def phase_next(project: Path, run_id: str, note: str = "") -> Tuple[str, str]:
                 ledger(project, run_id, f"artifact cleanup: {detail}")
         except Exception:
             pass
+        try:
+            write_timing(project, st)
+        except Exception:
+            pass
+        try:
+            from . import memory as M
+            M.remember_finished_run(project, st)
+        except Exception:
+            pass
     return cur, target
 
 
@@ -560,6 +587,8 @@ def phase_back(project: Path, run_id: str, target: str, reason: str) -> Tuple[st
             appr = paths.run_dir(project, run_id) / "approval.json"
             if appr.exists():
                 appr.rename(appr.with_name(f"approval-superseded-{int(time.time())}.json"))
+        if PHASES.index(target) < PHASES.index("approve"):
+            st.pop("plan_review_hash", None)
         st["phase"] = target
         st["status"] = "active"
         tasks = st.get("tasks") or {}

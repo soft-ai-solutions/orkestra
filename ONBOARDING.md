@@ -94,10 +94,17 @@ orkestra cursor install       # skills and subagents in ~/.cursor, hook entries 
 orkestra cursor status
 orkestra copilot install      # Copilot hooks under $COPILOT_HOME (or ~/.copilot)
 orkestra copilot status
+orkestra pi install           # skills under ~/.pi/agent/skills
+orkestra pi status
 ```
 
 `cursor install --dry-run` shows what it would change; `--copy` copies instead of linking. `cursor uninstall` removes
 exactly the entries it added, and a timestamped backup of `hooks.json` is taken first.
+
+`pi install --dry-run` shows the skill files it would write under `~/.pi/agent/skills` and the extension under
+`~/.pi/agent/extensions`. `pi uninstall` removes only the directories and the extension it marked. The extension
+gates tool calls on a bound run. `orkestra run --engine pi` starts Pi with `/skill:orkestra-run` once the skills
+and the extension are installed.
 
 ### Copilot host enable (manual)
 

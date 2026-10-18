@@ -989,6 +989,12 @@ class TestCursorKit(helpers.Sandbox):
         self.assertIn("is_background: false", head)
         self.assertIn(EN.NOTES_MARK, agent)
         self.assertNotIn("orkestra:reviewer", agent.split("---", 2)[2])
+        for sentence in ("own account, not proof", "does not count", "neither restored nor intentionally retired"):
+            self.assertIn(sentence, agent)
+        verifier = (CK.ASSETS / "agents" / "orkestra-verifier.md").read_text()
+        self.assertIn("is not proof: mark the row FAIL", verifier)
+        adversary = (CK.ASSETS / "agents" / "orkestra-adversary.md").read_text()
+        self.assertIn("the spec does not retire it", adversary)
         skill = (CK.ASSETS / "skills" / "orkestra-run" / "SKILL.md").read_text()
         self.assertIn("name: orkestra-run", skill.split("---")[1])
         self.assertNotIn("$ARGUMENTS", skill)

@@ -205,7 +205,8 @@ code { padding: 1px 4px; border-radius: 4px; background: var(--bg); font-size: .
   .legal-links a:last-child { grid-column: auto; }
   .footer { flex-direction: column; padding: 14px; }
   .jobs-tools { gap: 7px; }
-  .jobs-updated { display: none; }
+  .jobs-heading { flex-wrap: wrap; }
+  #jobs-updated { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; }
@@ -265,6 +266,10 @@ code { padding: 1px 4px; border-radius: 4px; background: var(--bg); font-size: .
 .flow-stage.is-complete:not(:last-child)::after { background: color-mix(in srgb, var(--accent) 55%, var(--line)); }
 .flow-stage-dot { position: relative; z-index: 1; display: grid; place-items: center; width: 25px; height: 25px; border: 1px solid var(--line); border-radius: 50%; color: var(--muted); background: var(--panel); font-size: 9px; font-weight: 800; }
 .flow-stage.is-complete .flow-stage-dot { border-color: var(--accent); color: white; background: var(--accent); }
+@media (prefers-color-scheme: dark) {
+  .brand-mark,
+  .flow-stage.is-complete .flow-stage-dot { color: #101619; }
+}
 .flow-stage.is-current { color: var(--text); font-weight: 800; }
 .flow-stage.is-current .flow-stage-dot { border: 2px solid var(--flow-state); color: var(--flow-state); box-shadow: 0 0 0 4px color-mix(in srgb, var(--flow-state) 13%, transparent); }
 .flow-stage-label { max-width: 100%; font-size: 9px; line-height: 1.2; overflow-wrap: anywhere; }

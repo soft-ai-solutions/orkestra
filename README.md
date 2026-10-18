@@ -129,21 +129,22 @@ First-time details, including Windows and Copilot host settings: [ONBOARDING.md]
 A run is driven by the engine that starts it. The terminal default is Claude Code; Cursor and Copilot runs carry their
 engine in the run state, and the engine that started a run is the one that resumes it.
 
-| | Claude Code | Cursor | GitHub Copilot |
-| --- | --- | --- | --- |
-| In the chat | `/orkestra:run <request>` | `/orkestra-run <request>` | `/orkestra:run <request>` |
-| From a terminal | `orkestra run -p <project> "<request>"` | `orkestra run --engine cursor -p <project> "<request>"` | `orkestra run --engine copilot -p <project> "<request>"` |
-| From Telegram | `/run <project> <request>` | `/run cursor <project> <request>` | `/run copilot: <project> <request>` |
-| Bridge API | `{"project": …, "request": …}` | add `"engine": "cursor"` | add `"engine": "copilot"` |
-| Status, continue | `/orkestra:status`, `/orkestra:resume` | `/orkestra-status`, `/orkestra-resume` | `/orkestra:status`, `/orkestra:resume` |
-| Undo a run's file changes | `/orkestra:rollback` | `/orkestra-rollback` | `/orkestra:rollback` |
-| Commit and push (only you call it) | `/orkestra:ship` | `/orkestra-ship` | `/orkestra:ship` |
+| | Claude Code | Cursor | GitHub Copilot | Pi |
+| --- | --- | --- | --- | --- |
+| In the chat | `/orkestra:run <request>` | `/orkestra-run <request>` | `/orkestra:run <request>` | `/skill:orkestra-run <request>` |
+| From a terminal | `orkestra run -p <project> "<request>"` | `orkestra run --engine cursor -p <project> "<request>"` | `orkestra run --engine copilot -p <project> "<request>"` | `orkestra run --engine pi -p <project> "<request>"` |
+| From Telegram | `/run <project> <request>` | `/run cursor <project> <request>` | `/run copilot: <project> <request>` | `/run pi: <project> <request>` |
+| Bridge API | `{"project": …, "request": …}` | add `"engine": "cursor"` | add `"engine": "copilot"` | add `"engine": "pi"` |
+| Status, continue | `/orkestra:status`, `/orkestra:resume` | `/orkestra-status`, `/orkestra-resume` | `/orkestra:status`, `/orkestra:resume` | `/skill:orkestra-status`, `/skill:orkestra-resume` |
+| Undo a run's file changes | `/orkestra:rollback` | `/orkestra-rollback` | `/orkestra:rollback` | `/skill:orkestra-rollback` |
+| Commit and push (only you call it) | `/orkestra:ship` | `/orkestra-ship` | `/orkestra:ship` | `/skill:orkestra-ship` |
 
 - **Claude Code**: `orkestra setup` installs a copy of the plugin into `~/.claude/plugins/cache/`; after a `git pull` bump the version and run `orkestra setup` again, otherwise the cached copy keeps running.
 - **Cursor**: `orkestra cursor install` links skills and subagents into `~/.cursor` and appends its entries to
   `~/.cursor/hooks.json` without touching yours (after a timestamped backup); `orkestra cursor uninstall` removes
   exactly those. Only chats that carry an Orkestra run are guarded; set `engine.cursor.global_guards` to apply the
   every-session guards to all Cursor chats.
+- **Pi**: `orkestra pi install` writes the Orkestra skills under `~/.pi/agent/skills` and the tool extension under `~/.pi/agent/extensions`. `orkestra pi status` and `orkestra pi uninstall` match the Cursor install surface. The extension sends each tool call through the same decision Claude and Cursor use, and a bound run continues to the next step when the turn would otherwise stop. In chat the command is `/skill:orkestra-run`. From a terminal, `orkestra run --engine pi` refuses until the skills and the extension are installed, then starts Pi with that short command instead of pasting the whole playbook.
 - **GitHub Copilot** (CLI and VS Code): `orkestra copilot install` writes the hook entries; you still enable the
   Orkestra agent plugin and its lifecycle hooks in the host yourself. An unhooked Copilot session must not start a
   guarded run. Copilot CLI launches default to `gpt-6-luna` with maximum reasoning effort; a supported model or effort
@@ -497,12 +498,8 @@ Orkestra is released under the [MIT License](LICENSE).
 
 Its playbooks and agent prompts were written with these projects as references; selected files from them are kept,
 unmodified and never loaded at runtime, under `plugins/orkestra/vendor/`, each with its own licence:
-[superpowers](https://github.com/obra/superpowers), [spec-kit](https://github.com/github/spec-kit),
-[BMAD-METHOD](https://github.com/bmad-code-org/BMAD-METHOD), [gsd-core](https://github.com/open-gsd/gsd-core),
-[OpenSpec](https://github.com/Fission-AI/OpenSpec), [humanlayer](https://github.com/humanlayer/humanlayer)
-(Apache-2.0), [compound-engineering-plugin](https://github.com/EveryInc/compound-engineering-plugin),
-[ECC](https://github.com/affaan-m/ECC) and
-[andrej-karpathy-skills](https://github.com/multica-ai/andrej-karpathy-skills). Copyright notices, pinned commits and
+[superpowers](https://github.com/obra/superpowers) and
+[ECC](https://github.com/affaan-m/ECC). Copyright notices, pinned commits and
 licence files: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 Orkestra is an independent project. It is not affiliated with or endorsed by Anthropic, Anysphere (Cursor), GitHub or
