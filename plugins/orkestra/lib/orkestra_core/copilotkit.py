@@ -272,9 +272,22 @@ def status(cfg: Optional[Dict[str, Any]] = None) -> List[Tuple[Optional[bool], s
     rows.append((active, "copilot hooks", i18n.t("cli.kit_active" if active else "cli.kit_not_installed")))
     detail, supported = profile_info(cfg, b)
     rows.append((None, "copilot profile", detail))
+    notice = allow_all_notice()
+    if notice:
+        rows.append((None, "copilot allow-all", notice))
     if supported is False:
         rows.append((None, "copilot context", i18n.t("cli.kit_context_unsupported")))
     return rows
+
+
+def allow_all_notice() -> str:
+    """The visible allow-all warning while the effective setting is on ("" when it is off or unresolvable)."""
+    user = paths.read_json(paths.orkestra_home() / "config.json", default={}) or {}
+    try:
+        on = EN.copilot_resolve(user if isinstance(user, dict) else {})["allow_all"]
+    except EN.EngineError:
+        return ""
+    return i18n.t("cli.copilot_allow_all_notice") if on else ""
 
 
 def profile_info(cfg: Optional[Dict[str, Any]], binary: Optional[str] = None) -> Tuple[str, Optional[bool]]:

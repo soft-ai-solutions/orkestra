@@ -4,7 +4,8 @@
 #   bash ./install.sh            # interactive
 #   bash ./install.sh --yes      # accept defaults (Context7 + Playwright MCP, bridge token)
 #   bash ./install.sh --no-mcp   # plugin only
-#   bash ./install.sh --skip-tests       # skip the plugin and bridge test suites
+#   bash ./install.sh --with-tests       # run the plugin and bridge test suites first (about 10 minutes; skipped by default)
+#   bash ./install.sh --skip-tests       # accepted, does nothing (the tests are skipped unless --with-tests)
 #   bash ./install.sh --dry-run  # print the plan, change nothing (prompts take their defaults)
 #   bash ./install.sh --uninstall [--purge]   # remove what this installer set up; --purge also deletes ~/.orkestra
 #   bash ./install.sh --refresh-vendor   # re-pull pinned reference files from GitHub
@@ -15,13 +16,17 @@ set -euo pipefail
 HOME="${HOME:-$(cd ~ 2>/dev/null && pwd || true)}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN="$ROOT/plugins/orkestra"
-YES=0; NO_MCP=0; REFRESH=0; SKIP_TESTS=0; DRY=0; UNINSTALL=0; PURGE=0; UNKNOWN=""; INSTALL_FAILED=0; HELP=0
+# Exact version of the npx package the Playwright MCP step registers (verified with `npm view @playwright/mcp version`);
+# bump it deliberately; an unpinned tag would let an upstream release change what runs.
+PLAYWRIGHT_MCP_VERSION="0.0.83"
+YES=0; NO_MCP=0; REFRESH=0; SKIP_TESTS=1; DRY=0; UNINSTALL=0; PURGE=0; UNKNOWN=""; INSTALL_FAILED=0; HELP=0
 for a in "$@"; do
   case "$a" in
     --yes|-y) YES=1 ;;
     --no-mcp) NO_MCP=1 ;;
     --refresh-vendor) REFRESH=1 ;;
-    --skip-tests) SKIP_TESTS=1 ;;
+    --with-tests) SKIP_TESTS=0 ;;
+    --skip-tests) ;;                                # no-op alias: the tests are skipped by default
     --dry-run) DRY=1 ;;
     --uninstall) UNINSTALL=1 ;;
     --purge) PURGE=1 ;;
@@ -99,7 +104,8 @@ if [ "$HELP" = 1 ]; then
   help_line 'bash ./install.sh' "$(L '# interactive' '# etkileşimli')"
   help_line 'bash ./install.sh --yes' "$(L '# accept defaults (Context7 + Playwright MCP, bridge token)' '# varsayılanları kabul et (Context7 + Playwright MCP, bridge tokeni)')"
   help_line 'bash ./install.sh --no-mcp' "$(L '# plugin only' '# yalnız eklenti')"
-  help_line 'bash ./install.sh --skip-tests' "$(L '# skip the plugin and bridge test suites' '# eklenti ve bridge test takımlarını atla')"
+  help_line 'bash ./install.sh --with-tests' "$(L '# run the plugin and bridge test suites first (about 10 minutes; skipped by default)' '# önce eklenti ve bridge test takımlarını çalıştır (yaklaşık 10 dakika; varsayılan: atlanır)')"
+  help_line 'bash ./install.sh --skip-tests' "$(L '# accepted, does nothing (tests are skipped unless --with-tests)' '# kabul edilir, bir şey yapmaz (--with-tests yoksa testler atlanır)')"
   help_line 'bash ./install.sh --dry-run' "$(L '# print the plan, change nothing (prompts take their defaults)' '# planı yazdır, hiçbir şey değiştirme (sorular varsayılanı alır)')"
   help_line 'bash ./install.sh --uninstall [--purge]' "$(L '# remove what this installer set up; --purge also deletes ~/.orkestra' '# bu kurulumun ekledikleri kaldırılır; --purge ~/.orkestra klasörünü de siler')"
   help_line 'bash ./install.sh --refresh-vendor' "$(L "# re-pull pinned reference files from GitHub" "# sabitlenmiş referans dosyalarını GitHub'dan yeniden çek")"
@@ -259,13 +265,14 @@ run "$PY" "$PLUGIN/bin/orkestra" doctor || { warn "$(L 'doctor warned about some
 if [ "$NO_MCP" = 0 ] && [ "$HAS_CLAUDE" = 1 ]; then
   say "$(L 'MCP tools (optional)' 'MCP araçları (isteğe bağlı)')"
   MCPS="$(claude mcp list 2>/dev/null || true)"
+  printf '   %s\n' "$(L "Context7 is a third-party service (https://mcp.context7.com/mcp, run by Upstash): the library and topic your assistant looks up are sent to it as queries. Playwright MCP runs locally through npx, pinned to @playwright/mcp@$PLAYWRIGHT_MCP_VERSION. Skip all MCP steps with --no-mcp." "Context7 üçüncü taraf bir hizmettir (https://mcp.context7.com/mcp, Upstash işletir): asistanınızın aradığı kütüphane ve konu sorgu olarak ona gönderilir. Playwright MCP yerelde npx ile çalışır ve @playwright/mcp@$PLAYWRIGHT_MCP_VERSION sürümüne sabitlenmiştir. Tüm MCP adımlarını --no-mcp ile atlayın.")"
   if echo "$MCPS" | grep -qi "context7"; then ok "$(L 'context7 already present' 'context7 zaten var')"
   elif ask "$(L 'Add Context7 (current library docs)?' 'Context7 (güncel kütüphane dokümanı) eklensin mi?')" y; then
     run claude mcp add --transport http context7 https://mcp.context7.com/mcp -s user && did "$(L 'context7 added' 'context7 eklendi')"
   fi
   if echo "$MCPS" | grep -qi "playwright"; then ok "$(L 'playwright already present' 'playwright zaten var')"
   elif command -v npx >/dev/null && ask "$(L 'Add the Playwright MCP?' 'Playwright MCP eklensin mi?')" y; then
-    run claude mcp add playwright -s user -- npx @playwright/mcp@latest && did "$(L 'playwright added' 'playwright eklendi')"
+    run claude mcp add playwright -s user -- npx @playwright/mcp@"$PLAYWRIGHT_MCP_VERSION" && did "$(L 'playwright added' 'playwright eklendi')"
   fi
   if echo "$MCPS" | grep -qi "serena"; then ok "$(L 'serena already present' 'serena zaten var')"
   elif command -v uv >/dev/null && ask "$(L 'Add Serena?' 'Serena eklensin mi?')" n; then

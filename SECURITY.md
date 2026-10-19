@@ -53,6 +53,9 @@ diffs in a target project (those playbooks live under `plugins/orkestra/skills/`
 
 ### Model providers
 
+- Copilot runs start with allow-all ON (tools, paths and URLs without a prompt) because the owner chose that default;
+  Orkestra's hooks and excluded tools still apply, but guards are not a sandbox. It is shown by `orkestra copilot status`
+  and turned off with `--no-allow-all` or `engine.copilot.allow_all: false` (see `docs/decisions.md`).
 - Orkestra itself does not phone home. Claude Code, Cursor, and Copilot clients may send prompts and project
   context to their providers under those products' terms. Orkestra does not implement or audit those clients.
 

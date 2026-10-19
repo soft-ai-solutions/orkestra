@@ -23,6 +23,12 @@ EN: Dict[str, str] = {
     "runs.no_git_rollback": "No git here: Orkestra can only restore files edited through its hooks. Run git init for full rollback.",
     # activity row when a run changes status: who asked (a chat id, or cli), from, to
     "runs.status_row": "{by}: status {src} → {dst}",
+    "runs.plan_bugfix_tdd": "request type is {kind}: at least one task must require TDD (repro-first). Add a task with `- TDD: required` whose test reproduces the symptom and fails before the fix.",
+    "runs.plan_bugfix_symptom": "{task}: request type is {kind}, so the first task must reference the symptom requirement. Name {fr} (or the FR that states the symptom) in its acceptance line.",
+    "runs.size_escalated": "size raised {old} → {new} at plan time: {why}",
+    "runs.size_escalated_why_risky": "the plan touches security or data paths ({files})",
+    "runs.size_escalated_why_tasks": "the plan has {count} tasks (more than {limit})",
+    "runs.size_escalated_why_files": "the plan touches {count} files (more than {limit})",
 }
 
 TR: Dict[str, str] = {
@@ -38,4 +44,10 @@ TR: Dict[str, str] = {
     "runs.gates_env_waiver_needed": "gate'ler çalışamadı (araç ya da bağımlılık eksik): {names}. Ortamı düzeltin ya da nedenini özellik klasöründeki gates-waiver.md dosyasına yazın.",
     "runs.no_git_rollback": "Burada git yok: Orkestra yalnızca kendi hook'larıyla düzenlenen dosyaları geri yükleyebilir. Tam geri alma için git init çalıştırın.",
     "runs.status_row": "{by}: durum {src} → {dst}",
+    "runs.plan_bugfix_tdd": "istek türü {kind}: en az bir görev TDD gerektirmeli (önce yeniden üretim). Testi belirtiyi yeniden üreten ve düzeltmeden önce başarısız olan, `- TDD: required` satırlı bir görev ekleyin.",
+    "runs.plan_bugfix_symptom": "{task}: istek türü {kind}, bu yüzden ilk görev belirti gereksinimine başvurmalı. Kabul satırında {fr} (ya da belirtiyi anlatan FR) adını yazın.",
+    "runs.size_escalated": "boyut plan aşamasında yükseltildi {old} → {new}: {why}",
+    "runs.size_escalated_why_risky": "plan güvenlik veya veri yollarına dokunuyor ({files})",
+    "runs.size_escalated_why_tasks": "planda {count} görev var ({limit} sınırından fazla)",
+    "runs.size_escalated_why_files": "plan {count} dosyaya dokunuyor ({limit} sınırından fazla)",
 }

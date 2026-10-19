@@ -34,7 +34,7 @@ macOS ve Linux:
 ```bash
 bash ./install.sh --dry-run         # isteğe bağlı: planı yazdır, hiçbir şeyi değiştirme
 bash ./install.sh                   # etkileşimli; --yes varsayılanları kabul eder, --no-mcp isteğe bağlı MCP sunucularını atlar
-bash ./install.sh --skip-tests      # kurulumun kendi test koşusunu atla (daha hızlı; risk sana ait)
+bash ./install.sh --with-tests      # önce eklenti ve bridge test takımlarını da koş (yaklaşık on dakika)
 ```
 
 Windows (PowerShell ya da cmd), native, WSL gerekmez:
@@ -42,7 +42,7 @@ Windows (PowerShell ya da cmd), native, WSL gerekmez:
 ```powershell
 .\install.ps1 --dry-run
 .\install.ps1
-python install.py --yes --skip-tests
+python install.py --yes --with-tests
 ```
 
 `install.ps1` tüm argümanları `install.py`'ye iletir; `install.py` motor kurulumunu, PATH kısayolunu ve sağlık kontrolünü
@@ -51,8 +51,8 @@ her sistemde yapar. İsteğe bağlı MCP adımı ve bridge token adımı yoktur 
 (execution policy) ya da `python` Microsoft Store'u açarsa `py -3 install.py` çalıştır. LaunchAgent
 (`launchd`) adımı yalnız macOS'a özgüdür ve Linux ile Windows'ta atlanır.
 
-`--skip-tests` olmadan kurulum önce eklenti ve bridge test takımlarını makinende koşar (birkaç dakika; CPU yükü süreyi
-değiştirir) ve biri bile kırmızıysa durur. Sonra checkout'u `orkestra-local` adlı Claude Code marketplace'i olarak kaydeder,
+Kurulum, `--with-tests` vermezsen test koşmaz; verirsen önce eklenti ve bridge test takımlarını makinende koşar (yaklaşık
+on dakika; CPU yükü süreyi değiştirir) ve biri bile kırmızıysa durur (`--skip-tests` kabul edilir ve bir şey yapmaz). Sonra checkout'u `orkestra-local` adlı Claude Code marketplace'i olarak kaydeder,
 `orkestra@orkestra-local` eklentisini kurar, `orkestra doctor` çalıştırır, Cursor ve Copilot kurulumunu önerir, PATH
 kısayolunu ekler ve `install.sh` ile isteğe bağlı MCP sunucularını ve bridge token'ını önerir. Claude Code CLI yoksa yalnız
 Cursor ve Copilot ile devam eder ve hiçbir motor hazır değilse uyarır. Başarısız bir Claude Code adımı ya da başarısız bir
@@ -207,7 +207,7 @@ kaldırmayı 1 çıkış koduyla durdurur ve hiçbir şeyi değiştirmez: dosyay
 | `orkestra: command not found` | 4. bölüm: kısayol klasörünü oluştur, PATH'e ekle, `python3 plugins/orkestra/bin/orkestra setup`'ı yeniden çalıştır. |
 | `doctor` hook öz-testinde kırılıyor | `orkestra setup`'ı yeniden çalıştır; Windows'ta PATH'te `sh` ve gerçek bir Python 3.9+ (Store taslağı değil) olduğunu denetle. |
 | Cursor ya da Copilot guard'ları çalışmıyor | `orkestra cursor status` / `orkestra copilot status`, sonra **yeni** bir sohbet aç; Copilot için host eklentisini etkinleştir (5. bölüm). |
-| Kurulum kırmızı bir testte duruyor | Kırılan test ve `orkestra doctor` çıktısıyla bir issue aç. `--skip-tests` bunu atlar, risk sana aittir. |
+| Kurulum kırmızı bir testte duruyor | Yalnızca `--with-tests` ile olur. Kırılan test ve `orkestra doctor` çıktısıyla bir issue aç. |
 | Çıktı yanlış dilde | `orkestra lang show`, sonra `orkestra lang en` ya da `orkestra lang tr`. |
 
 Daha fazlası README'de: [SSS ve sorun giderme](README.tr.md#sss-ve-sorun-giderme).

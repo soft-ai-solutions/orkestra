@@ -399,7 +399,8 @@ def cmd_context(a: argparse.Namespace) -> int:
         _out(f"memory: features {dg.get('features_total', '0')} · learnings {dg.get('learnings_total', '0')} · "
              f"specs: {dg.get('specs') or '—'}")
     else:
-        _out("memory: NOT INITIALIZED → run onboarding first (`orkestra init` + playbook onboard)")
+        _out("memory: NOT INITIALIZED → run `orkestra init` (it fills PROJECT.md from the files in this checkout), "
+             "then `orkestra memory check`")
     _out(f"gates: {gates_txt} · confirmed: {'yes' if cfg.get('gates_confirmed') else 'no'}")
     if config_problem:
         _out("WARNING: " + config_problem)
@@ -448,6 +449,8 @@ def cmd_init(a: argparse.Namespace) -> int:
     created = R.init_project(project)
     _out(f"initialized {project.name}: " + (", ".join(created) if created else "already initialized"))
     cfg = paths.project_config(project)
+    if any(x.endswith("PROJECT.md") for x in created):
+        _out(i18n.t("cli.init_project_md"))
     _out("detected gates: " + (", ".join(f"{g['name']}=`{g['cmd']}`" for g in cfg.get("gates") or []) or "none"))
     if not cfg.get("gates"):
         _out(i18n.t("cli.init_no_gates", example='{"gates": [{"name": "test", "kind": "test", "cmd": "npm test", "timeout": 600}]}'))
@@ -461,6 +464,14 @@ def _title_from_request(request: str) -> str:
     if len(text) > 60:
         text = text[:60].rsplit(" ", 1)[0].rstrip(" ,;:.") + "…" if " " in text[:60] else text[:60]
     return text
+
+
+def _baseline_line(base: Dict[str, Any]) -> str:
+    """The `baseline:` line of `orkestra start`: plain words, no Python reprs (`head=None`)."""
+    dirty = int(base.get("dirty_files") or 0)
+    where = "no git repository" if not base.get("git") else (
+        f"git {str(base['head'])[:12]}" if base.get("head") else "git, no commits yet")
+    return f"baseline: {where} · uncommitted files: {dirty}"
 
 
 def cmd_start(a: argparse.Namespace) -> int:
@@ -503,19 +514,21 @@ def cmd_start(a: argparse.Namespace) -> int:
     else:
         size_note = ""
     _out(f"size: {size}{size_note}")
-    _out(f"baseline: git={st['baseline']['git']} head={str(st['baseline'].get('head'))[:12]} "
-         f"uncommitted_files={st['baseline']['dirty_files']}")
+    _out(_baseline_line(st["baseline"]))
     if not st["baseline"]["git"]:
         _out(i18n.t("runs.no_git_rollback"))
     if st["baseline"]["dirty_files"]:
         _out("NOTE: the working tree already had uncommitted changes. They are backed up and will never be "
-             "attributed to this run. Tell the user.")
-    _out(f"artifacts: {paths.feature_dir(project, rid)}  (short path: .orkestra/current/ — no globs needed)")
+             "attributed to this run.")
+    _out(f"artifacts: .orkestra/features/{rid}/ (short path: .orkestra/current/, no globs needed)")
     others = R.other_open_runs(project)
     if len(others) >= 2:
         _out(f"WARNING: {len(others)} other runs are open on this machine ({', '.join(others)}). They share CPU with this "
-             f"one (tests, builds, simulators) and every run gets slower. Tell the user in one line; continue if they want.")
+             f"one (tests, builds, simulators) and every run gets slower.")
     _out(f"next action: {phase_goal('intake')}")
+    guess = R.classification_prefill(request, size)
+    _out(f"suggested classification (verify it, correct what is wrong, then append it): Type: {guess['type']} · "
+         f"Size: {guess['size']} · Risk: {guess['risk']}")
     if paths.memory_dir(project).is_dir():
         lessons = M.digest(project, query=request)
         if lessons.get("learnings_matched") == "1" and lessons.get("learnings"):
@@ -1427,6 +1440,8 @@ def cmd_run(a: argparse.Namespace) -> int:
     _out(i18n.t("cli.run_opened", run=rid, project=project.name, size=st.get("size") or ""))
     _out(f"artifacts: {paths.feature_dir(project, rid)}  (short path: .orkestra/current/)")
     _out(i18n.t("cli.run_dashboard_hint"))
+    if engine == "copilot" and opts.get("allow_all") is not False:
+        _out(i18n.t("cli.copilot_allow_all_notice"))
     sys.stdout.flush()
     sys.stderr.flush()
     os.chdir(str(project))
@@ -1920,6 +1935,11 @@ def _repair_damaged_runs(project_arg: Optional[str] = None) -> int:
     return code
 
 
+def cmd_demo(a: argparse.Namespace) -> int:
+    from . import demo
+    return demo.run(_out, keep=bool(a.keep))
+
+
 def cmd_doctor(a: argparse.Namespace) -> int:
     if getattr(a, "repair", False):
         return _repair_damaged_runs(getattr(a, "project", None))
@@ -2042,7 +2062,7 @@ HANDLERS = {
     "pause": cmd_status_change, "abort": cmd_status_change, "gate": cmd_gate, "tdd": cmd_tdd, "task": cmd_task,
     "brief": cmd_brief, "plan": cmd_check, "trace": cmd_check, "deps": cmd_check, "review": cmd_check,
     "changes": cmd_changes, "diff": cmd_diff, "rollback": cmd_rollback, "clean": cmd_clean, "memory": cmd_memory,
-    "playbook": cmd_playbook, "template": cmd_template, "doctor": cmd_doctor, "pi": cmd_pi,
+    "playbook": cmd_playbook, "template": cmd_template, "doctor": cmd_doctor, "demo": cmd_demo, "pi": cmd_pi,
     "watch": cmd_watch, "dashboard": cmd_dashboard,
     "evidence": cmd_evidence, "integrity": cmd_integrity, "report": cmd_report,
     "next": cmd_next, "wait": cmd_wait, "tempo": cmd_tempo, "watchdog": cmd_watchdog, "agents": cmd_agents,

@@ -12,7 +12,9 @@ import re
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
+from . import hints
 from . import i18n
+from . import paths
 from .messages import protocol as P
 from .workkind import nonsoftware_plan_problems
 
@@ -271,11 +273,13 @@ def _field_label(key: str) -> str:
 
 
 def check_plan(spec_text: str, plan_text: str, project: Optional[Path] = None, *,
-               work_kind: Optional[str] = None, run_id: Optional[str] = None) -> List[str]:
+               work_kind: Optional[str] = None, run_id: Optional[str] = None,
+               repro_first: bool = True) -> List[str]:
     """Structural lint (+ file existence when `project` is given). Returns problems (empty == OK).
 
     writing and general add deliverable-path and content-check TDD problems. Any other
-    work_kind, including a missing one, leaves the software list unchanged.
+    work_kind, including a missing one, leaves the software list unchanged. `repro_first=False` skips the
+    bugfix/perf repro-first rule (a run already past plan approval must not be blocked by it).
     """
     problems: List[str] = []
     if not spec_text.strip():
@@ -322,7 +326,55 @@ def check_plan(spec_text: str, plan_text: str, project: Optional[Path] = None, *
             problems.append(f"{sc} is not referenced anywhere in plan.md (map it in the test strategy)")
     if work_kind in ("writing", "general"):
         problems.extend(nonsoftware_plan_problems(tasks, run_id if isinstance(run_id, str) else ""))
+    elif repro_first and tasks and project is not None and isinstance(run_id, str) and run_id:
+        problems.extend(bugfix_plan_problems(tasks, spec_text, request_type(project, run_id)))
     return problems
+
+
+_TYPE_LINE_RE = re.compile(r"^\s*[-*]?\s*\**\s*(type|tur)\s*\**\s*:\s*\**\s*([a-z]+)", re.I | re.M)
+REPRO_FIRST_TYPES = ("bugfix", "perf")
+
+
+def request_type(project: Path, run_id: str) -> str:
+    """The `Type:` (Turkish `Tur:`) token of the request's classification block, lower case; "" when absent."""
+    try:
+        text = (paths.feature_dir(project, run_id) / "request.md").read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return ""
+    body = heading_body(text, "classification")
+    m = _TYPE_LINE_RE.search(P.ascii_fold(body)) if body else None
+    return m.group(2).lower() if m else ""
+
+
+def bugfix_plan_problems(tasks: List[Task], spec_text: str, kind: str) -> List[str]:
+    """A bugfix or perf request needs a repro-first task, and T001 must tie to a requirement (the symptom FR)."""
+    if kind not in REPRO_FIRST_TYPES:
+        return []
+    out: List[str] = []
+    if not any(t.tdd == "required" for t in tasks):
+        out.append(i18n.t("runs.plan_bugfix_tdd", kind=kind))
+    first = next((t for t in tasks if t.id == "T001"), tasks[0])
+    fr_ids = [i for i in spec_ids(spec_text) if i.startswith("FR-")]
+    if fr_ids and not any(re.search(rf"(?<![\w-]){re.escape(fr)}(?![\w-])", first.body) for fr in fr_ids):
+        out.append(i18n.t("runs.plan_bugfix_symptom", task=first.id, kind=kind, fr=fr_ids[0]))
+    return out
+
+
+SIZE_ESCALATION_TASKS = 3
+SIZE_ESCALATION_FILES = 8
+
+
+def size_escalation_reason(tasks: List[Task]) -> str:
+    """Why a plan outgrew XS/S ("" when it did not): risky paths, more than 3 tasks, or more than 8 distinct files."""
+    files = sorted({f.replace("\\", "/") for t in tasks for f in t.files if f and "/.orkestra/" not in "/" + f})
+    risky = [f for f in files if hints.SECURITY_RE.search(f) or hints.DATA_RE.search(f)]
+    if risky:
+        return i18n.t("runs.size_escalated_why_risky", files=", ".join(risky[:3]))
+    if len(tasks) > SIZE_ESCALATION_TASKS:
+        return i18n.t("runs.size_escalated_why_tasks", count=len(tasks), limit=SIZE_ESCALATION_TASKS)
+    if len(files) > SIZE_ESCALATION_FILES:
+        return i18n.t("runs.size_escalated_why_files", count=len(files), limit=SIZE_ESCALATION_FILES)
+    return ""
 
 
 _BROAD_TEST_RE = re.compile(r"^(?:npm\s+(?:run\s+)?test|yarn\s+test|pnpm\s+test|pytest|python3?\s+-m\s+pytest|"

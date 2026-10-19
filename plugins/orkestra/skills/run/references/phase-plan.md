@@ -15,4 +15,7 @@ Goal: an approval-ready, implementation-proof plan. Output: `plan.md` + `reviews
 4. `orkestra plan check -p <project>` must print OK. If it adds `NOTE: LARGE PLAN`, preserve the full requested scope,
    choose a dependency-safe order and avoid optional work. Do not ask the user to choose a split in autopilot; in manual
    mode, include a materially necessary split in the approval summary.
-5. `orkestra phase next`.
+5. Plan rules the CLI enforces:
+   - **Bugfix / perf** (`Type:` in the classification block): at least one task has `TDD: required` (repro-first) and T001 references the symptom FR.
+   - **Size only rises:** leaving plan, an XS/S run whose plan touches security or data paths, has more than 3 tasks or more than 8 files becomes M (ledger line says why), so the plan-critic is then required. M/L are never changed.
+6. `orkestra phase next`.

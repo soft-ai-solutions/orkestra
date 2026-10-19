@@ -17,6 +17,7 @@ English first, Türkçe aşağıda. The documents for users exist in both langua
 | Report a vulnerability | [SECURITY.md](../SECURITY.md) (English only; you may write in Turkish) |
 | See what changed | [CHANGELOG.md](../CHANGELOG.md) (English from the Unreleased entry on; older entries are Turkish) |
 | Edit this repository as an agent | [AGENTS.md](../AGENTS.md) (English only) |
+| Read the decisions behind distribution, safety defaults, cost and privacy, and what is not done | [decisions.md](decisions.md) |
 
 ## Türkçe
 
@@ -31,6 +32,7 @@ English first, Türkçe aşağıda. The documents for users exist in both langua
 | Kod, metin ya da çeviri ile katkı vermek | [CONTRIBUTING.md](../CONTRIBUTING.md) (İngilizce) |
 | Güvenlik açığı bildirmek | [SECURITY.md](../SECURITY.md) (İngilizce; Türkçe yazabilirsin) |
 | Neyin değiştiğini görmek | [CHANGELOG.md](../CHANGELOG.md) |
+| Dağıtım, güvenlik varsayılanları, maliyet ve gizlilik kararlarını ve yapılmayanları okumak | [decisions.tr.md](decisions.tr.md) |
 
 ## About these files
 

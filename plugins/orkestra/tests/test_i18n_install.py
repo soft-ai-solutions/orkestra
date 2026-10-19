@@ -184,6 +184,10 @@ class TestInstallPy(unittest.TestCase):
         self.assertGreaterEqual(len(used), 5)
         for code in ("en", "tr"):
             self.assertEqual(sorted(used - set(i18n.catalog(code))), [], code)
+        # scripts/release.py owns the install.release_* keys: each one is named (quoted) there, and none is dead
+        release_src = (INSTALL_PY.parent / "scripts" / "release.py").read_text(encoding="utf-8")
+        used |= {k for k in i18n.catalog("en") if k.startswith("install.release_")
+                 and '"%s"' % k[len("install.release_"):] in release_src}
         self.assertEqual(sorted(k for k in i18n.catalog("en") if k.startswith("install.")), sorted(used))
 
     def test_a_missing_library_falls_back_to_english(self):

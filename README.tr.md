@@ -19,7 +19,7 @@ macOS ve Linux (Windows: deneysel)
 ve sır okumaları hook'larla reddedilir, rapor makinenin yazdığı kanıtı taşır.
 - **Olurken görürsün**: `orkestra watch` ve `orkestra next` ile.
 
-Tek bir unittest dosyası olan, henüz commit'i olmayan bir demo projede gerçek bir oturum (komutlar geçici bir home içinde çalıştırıldı; yalnız geçici yollar `~` olarak kısaltıldı ve çıktıdaki iki em dash `:` olarak yazıldı, başka bir şey düzenlenmedi; çıktı İngilizcedir):
+Tek bir unittest dosyası olan, henüz commit'i olmayan bir demo projede gerçek bir oturum (komutlar geçici bir home içinde çalıştırıldı; geçici yollar `~` olarak kısaltıldı, geçici home `~/.orkestra` olarak yazıldı, çıktıdaki tek em dash (kanıt başlığında) `:` olarak yazıldı ve `watch`ın sonda bastığı boş satır atıldı, başka bir şey düzenlenmedi; çıktı İngilizcedir):
 
 ```text
 $ orkestra init -p .
@@ -28,19 +28,21 @@ detected gates: unittest=`python3 -m unittest discover -s . -q`
 $ orkestra start "add CSV export to the order list"
 run started: 001-add-csv-export-to-the-order-list in ~/demo
 size: M (inferred from request; override with --size XS|S|M|L)
-baseline: git=True head=None uncommitted_files=1
-NOTE: the working tree already had uncommitted changes. They are backed up and will never be attributed to this run. Tell the user.
-artifacts: ~/demo/.orkestra/features/001-add-csv-export-to-the-order-list  (short path: .orkestra/current/ : no globs needed)
+baseline: git, no commits yet · uncommitted files: 1
+NOTE: the working tree already had uncommitted changes. They are backed up and will never be attributed to this run.
+artifacts: .orkestra/features/001-add-csv-export-to-the-order-list/ (short path: .orkestra/current/, no globs needed)
 next action: Classify the request (size XS/S/M/L, project, risk) into request.md → `orkestra phase next`.
+suggested classification (verify it, correct what is wrong, then append it): Type: feature · Size: M · Risk: medium
 [orkestra:bind] project=~/demo run=001-add-csv-export-to-the-order-list home=~/.orkestra
 $ orkestra watch --once
 ━━ demo · 001-add-csv-export-to-the-order-list · "add CSV export to the order list" (M) ━━━━━━━━━━━━━━━━━━━━━━
- phase    intake  › discover › clarify › plan › approve › implement › verify › review › deliver › done · in this phase for 0s
+ phase    intake  › discover › clarify › plan › approve › implement › verify › review › deliver › done · in this phase for 1s
  status  ● intake phase open · run state updated 0s ago; no hook activity yet
- clock   Total 0s · intake: 0s
+ pace    total 1s
+ clock   Total 1s · intake: 1s
  session 0 bound: no open agent session is working on this run
    (no activity logged yet: logging starts with the first tool calls after this plugin version is loaded)
- ledger  2026-10-19 22:31 run started: 'add CSV export to the order list' (size M, mode interactive, engine c…
+ ledger  2026-10-19 23:52 run started: 'add CSV export to the order list' (size M, mode interactive, engine c…
 $ orkestra next
 next [intake]: classify the request: append `## Classification` to request.md (`orkestra playbook intake`)
 why: request.md has no classification yet
@@ -99,14 +101,13 @@ Claude Code ya da Copilot sohbetinde `/orkestra:run <istek>`, Cursor'da `/orkest
 <details>
 <summary>Tam kurulum ve Windows seçenekleri</summary>
 
-Tam kurulum aynı işi yapar ve fazlasını ekler: önce eklenti ve bridge test takımlarını makinende koşar (birkaç dakika;
-biri kırmızıysa durur), checkout'u Claude Code marketplace'i olarak kaydeder (`orkestra@orkestra-local`, `plugins/orkestra`
+Tam kurulum aynı işi yapar ve fazlasını ekler: checkout'u Claude Code marketplace'i olarak kaydeder (`orkestra@orkestra-local`, `plugins/orkestra`
 altından önbelleğe aldığı kopyayı çalıştırır), kabul ettiğin Cursor ve Copilot hook'larını kurar ve yalnız `install.sh` ile isteğe bağlı MCP
 sunucularını ekler, bridge token'ını oluşturur.
 
 ```bash
 bash ./install.sh                  # etkileşimli (macOS ve Linux)
-bash ./install.sh --yes --skip-tests   # varsayılanları kabul et, test takımlarını atla (risk sana ait)
+bash ./install.sh --yes --with-tests   # varsayılanları kabul et ve önce test takımlarını koş (yaklaşık on dakika)
 bash ./install.sh --dry-run        # planı yazdır, hiçbir şeyi değiştirme
 bash ./install.sh --uninstall      # kayıtları geri al (~/.orkestra'yı ve bridge token'ını da silmek için --purge ekle)
 ```
@@ -122,9 +123,28 @@ python install.py --dry-run
 
 </details>
 
+<details>
+<summary>uv ya da pipx ile kurulum</summary>
+
+`pyproject.toml`, `orkestra` paketini derler (çalışma zamanı bağımlılığı yok). Bu depoda yerel checkout yolundan, geçici bir
+home içinde kanıtlandı: `uvx` `orkestra --version` ve `orkestra doctor` çalıştırdı, `uv tool install` `orkestra` komutunu
+PATH'e koydu. `pipx` burada sınanmadı ve `git+https://` biçimi yalnızca `pyproject.toml` uzak dalda varsa çalışır.
+`orkestra setup` için kalıcı bir kurulum kullan; `uvx` geçici bir önbellekten çalışır. PyPI ya da Homebrew'e hiçbir şey
+yayımlanmadı. Ayrıntı ve sınırlar: [docs/decisions.tr.md](docs/decisions.tr.md).
+
+```bash
+uv tool install .                  # ya da: pipx install .   (checkout'un içinde çalıştır)
+uvx --from . orkestra --version
+```
+
+</details>
+
 `setup` ve kurulum betikleri PATH'e bir `orkestra` kısayolu koyar, ama yalnız zaten var olan bir klasöre:
 `~/.local/bin` (ya da `ORKESTRA_SHIM_DIR` içindeki klasör). Sonrasında `orkestra` bulunamazsa
 [SSS](#sss-ve-sorun-giderme) bölümüne bak. Claude Code oturumunun içinde komut zaten kullanılabilir.
+
+Henüz motorun yok mu? `orkestra demo` geçici bir projede bir saniyelik tur koşar: gerçek bir hook force-push'u reddeder,
+kanıt, bir gate ve izleme görünümü gösterilir. Dosyalarına dokunmaz.
 
 İlk kurulum ayrıntıları, Windows ve Copilot host ayarları dahil: [ONBOARDING.tr.md](ONBOARDING.tr.md).
 
@@ -528,7 +548,7 @@ açtığın özelliklerdir: isteğe bağlı bridge, bir bot yapılandırılmış
 sabitlenmiş referans dosyalarını GitHub'dan indirir.
 
 **Kurulum kırmızı bir testte durdu.** Ön kontrolün amacı budur; lütfen `orkestra doctor` çıktısı ve kırılan testle bir issue
-aç. `--skip-tests` bunu atlar, risk sana aittir.
+aç. Kurulum testleri yalnızca `--with-tests` ile koşar (`--skip-tests` hâlâ kabul edilir ve bir şey yapmaz).
 
 **Hata bildirimi.** Issue formlarını kullan ve `orkestra --version` çıktısını, işletim sistemini, Python sürümünü, motoru ve
 `orkestra doctor` çıktısını ekle. Güvenlik sorunları herkese açık issue'ya değil [SECURITY.md](SECURITY.md) kanalına gider.
@@ -551,6 +571,11 @@ aç. `--skip-tests` bunu atlar, risk sana aittir.
   penceresi daha az. Cursor run'larında token kullanımı raporlanmaz.
 - Windows native desteklenir ama macOS ve Linux kadar denenmedi (CI suite'leri `windows-latest` üzerinde koşacak şekilde
   yapılandırıldı; bakımcı makinesi yok). Watchdog orada yalnız bildirir, hızlı izleyici yoktur; masaüstü bildirimi macOS ve Linux içindir.
+- Copilot run'ları varsayılan olarak allow-all AÇIK başlar (araçlar, yollar ve URL'ler sormadan; Orkestra'nın hook'ları ve
+  hariç tutulan araçlar yine geçerli). `orkestra copilot status` ve `orkestra run --engine copilot` başlangıcı bunu söyler.
+  `--no-allow-all` ile ya da `engine.copilot.allow_all` değerini `false` yaparak kapat.
+- Bilerek yapılmadı: PyPI, Homebrew ya da marketplace listelemesi, kıyaslamalar, model kademelendirme ve ismin marka
+  kontrolü. Nedenleri ve her birinin neye ihtiyaç duyduğu: [docs/decisions.tr.md](docs/decisions.tr.md).
 - Tek makine, tek kullanıcı. Barındırılan servis ve telemetri yok: makinenden model sağlayıcısının kendi istemcisinin
   gönderdiğinden ve senin yapılandırdığın isteğe bağlı özelliklerden (Telegram, callback ya da webhook adresi; SSS'ye bak)
   başka bir şey çıkmaz.

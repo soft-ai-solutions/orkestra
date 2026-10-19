@@ -12,15 +12,15 @@ from orkestra_core import i18n
 from orkestra_core.mcpinstall import McpError, install, status
 
 CURSOR_CONTEXT7 = {"url": "https://mcp.context7.com/mcp"}
-CURSOR_PLAYWRIGHT = {"command": "npx", "args": ["@playwright/mcp@latest"]}
+CURSOR_PLAYWRIGHT = {"command": "npx", "args": ["@playwright/mcp@0.0.83"]}
 CURSOR_SERENA = {"command": "serena", "args": ["start-mcp-server"]}
 COPILOT_CONTEXT7 = {"type": "http", "url": "https://mcp.context7.com/mcp", "tools": ["*"]}
-COPILOT_PLAYWRIGHT = {"type": "stdio", "command": "npx", "args": ["@playwright/mcp@latest"], "tools": ["*"]}
+COPILOT_PLAYWRIGHT = {"type": "stdio", "command": "npx", "args": ["@playwright/mcp@0.0.83"], "tools": ["*"]}
 COPILOT_SERENA = {"type": "stdio", "command": "serena", "args": ["start-mcp-server"], "tools": ["*"]}
 CLAUDE_CONTEXT7 = ["mcp", "add", "--transport", "http", "context7", "https://mcp.context7.com/mcp", "-s", "user"]
-CLAUDE_PLAYWRIGHT = ["mcp", "add", "playwright", "-s", "user", "--", "npx", "@playwright/mcp@latest"]
+CLAUDE_PLAYWRIGHT = ["mcp", "add", "playwright", "-s", "user", "--", "npx", "@playwright/mcp@0.0.83"]
 COPILOT_ADD_CONTEXT7 = ["mcp", "add", "--transport", "http", "context7", "https://mcp.context7.com/mcp"]
-COPILOT_ADD_PLAYWRIGHT = ["mcp", "add", "playwright", "--", "npx", "@playwright/mcp@latest"]
+COPILOT_ADD_PLAYWRIGHT = ["mcp", "add", "playwright", "--", "npx", "@playwright/mcp@0.0.83"]
 ADDED = (
     {"host": "cursor", "name": "context7", "state": "added"},
     {"host": "cursor", "name": "playwright", "state": "added"},

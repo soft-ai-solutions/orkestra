@@ -14,6 +14,8 @@ from . import i18n
 from .util import write_json_atomic
 
 _DEFAULT_NAMES = ("context7", "playwright")
+# Exact npx package pin; must equal PLAYWRIGHT_MCP_VERSION in install.sh (test_mcp_install_lock checks it).
+PLAYWRIGHT_MCP_PACKAGE = "@playwright/mcp@0.0.83"
 
 
 class McpError(EN.EngineError):
@@ -26,7 +28,7 @@ def _cursor_server(name: str) -> Dict[str, Any]:
     if name == "context7":
         return {"url": "https://mcp.context7.com/mcp"}
     if name == "playwright":
-        return {"command": "npx", "args": ["@playwright/mcp@latest"]}
+        return {"command": "npx", "args": [PLAYWRIGHT_MCP_PACKAGE]}
     if name == "serena":
         return {"command": "serena", "args": ["start-mcp-server"]}
     raise McpError("not_object", name)
@@ -81,7 +83,7 @@ def _copilot_server(name: str) -> Dict[str, Any]:
     if name == "context7":
         return {"type": "http", "url": "https://mcp.context7.com/mcp", "tools": ["*"]}
     if name == "playwright":
-        return {"type": "stdio", "command": "npx", "args": ["@playwright/mcp@latest"], "tools": ["*"]}
+        return {"type": "stdio", "command": "npx", "args": [PLAYWRIGHT_MCP_PACKAGE], "tools": ["*"]}
     if name == "serena":
         return {"type": "stdio", "command": "serena", "args": ["start-mcp-server"], "tools": ["*"]}
     raise McpError("not_object", name)
@@ -137,7 +139,7 @@ _CMD_TIMEOUT = 30
 
 _CLAUDE_ADD: Dict[str, Tuple[str, ...]] = {
     "context7": ("mcp", "add", "--transport", "http", "context7", "https://mcp.context7.com/mcp", "-s", "user"),
-    "playwright": ("mcp", "add", "playwright", "-s", "user", "--", "npx", "@playwright/mcp@latest"),
+    "playwright": ("mcp", "add", "playwright", "-s", "user", "--", "npx", PLAYWRIGHT_MCP_PACKAGE),
     "serena": (
         "mcp", "add", "--scope", "user", "serena", "--", "serena", "start-mcp-server",
         "--context", "claude-code", "--project-from-cwd",
@@ -146,7 +148,7 @@ _CLAUDE_ADD: Dict[str, Tuple[str, ...]] = {
 
 _COPILOT_ADD: Dict[str, Tuple[str, ...]] = {
     "context7": ("mcp", "add", "--transport", "http", "context7", "https://mcp.context7.com/mcp"),
-    "playwright": ("mcp", "add", "playwright", "--", "npx", "@playwright/mcp@latest"),
+    "playwright": ("mcp", "add", "playwright", "--", "npx", PLAYWRIGHT_MCP_PACKAGE),
     "serena": ("mcp", "add", "serena", "--", "serena", "start-mcp-server"),
 }
 

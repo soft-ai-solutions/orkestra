@@ -1,0 +1,46 @@
+# Packaging for `pipx install git+<repo>` / `uvx --from git+<repo> orkestra` / `pip install .`.
+# No runtime dependencies: Orkestra is Python standard library only. The version below must equal
+# orkestra_core.__version__ (plugins/orkestra/lib/orkestra_core/__init__.py); scripts/release.sh writes both and
+# plugins/orkestra/tests/test_packaging.py fails on drift.
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "orkestra"
+version = "1.6.0"
+description = "Deterministic agent orchestra for end-to-end software delivery, with hook-enforced guards (Claude Code, Cursor, Copilot)."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Orkestra contributors" }]
+keywords = ["sdlc", "orchestration", "tdd", "agents", "guards"]
+classifiers = [
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Operating System :: OS Independent",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/soft-ai-solutions/orkestra"
+Repository = "https://github.com/soft-ai-solutions/orkestra"
+Changelog = "https://github.com/soft-ai-solutions/orkestra/blob/main/CHANGELOG.md"
+
+[project.scripts]
+orkestra = "orkestra_cli:main"
+
+[tool.setuptools]
+include-package-data = false
+packages = ["orkestra_cli", "orkestra_plugin"]
+
+[tool.setuptools.package-dir]
+orkestra_cli = "packaging/orkestra_cli"
+orkestra_plugin = "plugins/orkestra"
+
+# The plugin tree ships as data under orkestra_plugin/ (same layout as plugins/orkestra), minus the test suite.
+[tool.setuptools.package-data]
+orkestra_plugin = ["*", "**/*"]
+
+[tool.setuptools.exclude-package-data]
+orkestra_plugin = ["tests/*", "tests/**/*", "**/__pycache__/*", "**/*.pyc"]

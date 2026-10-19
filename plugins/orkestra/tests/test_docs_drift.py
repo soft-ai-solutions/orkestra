@@ -1019,5 +1019,51 @@ class TestInstallerClaims(unittest.TestCase):
         self.assertEqual(cp.returncode, 2, "the docs say install.py has no --refresh-vendor: keep both true")
 
 
+class TestDecisionRecord(unittest.TestCase):
+    """docs/decisions.md and its Turkish twin: same structure, honest about what is not done, notices match the vendor pins."""
+    EN, TR = ROOT / "docs" / "decisions.md", ROOT / "docs" / "decisions.tr.md"
+
+    def test_both_exist_with_the_same_numbered_sections_and_no_em_dash(self):
+        def numbered(doc):
+            return [t.split(".", 1)[0] for lvl, t in headings(read(doc)) if lvl == 2]
+        self.assertEqual(numbered(self.EN), numbered(self.TR))
+        self.assertEqual(numbered(self.EN), ["1", "2", "3", "4", "5", "6"])
+        for doc in (self.EN, self.TR):
+            self.assertNotIn("\u2014", read(doc), doc.name)
+
+    def test_the_not_done_items_and_the_switches_are_stated_in_both_languages(self):
+        for doc in (self.EN, self.TR):
+            text = read(doc)
+            for needle in ("PyPI", "Homebrew", "--no-allow-all", "engine.copilot.allow_all", "--no-mcp", "--with-tests",
+                           "orkestra-local", "MIT"):
+                self.assertIn(needle, text, f"{doc.name}: {needle}")
+
+    def test_the_documented_switches_exist_in_the_code(self):
+        from orkestra_core import engines
+        self.assertTrue(engines.COPILOT_DEFAULTS["allow_all"], "the docs say allow-all is on by default")
+        run_help = subprocess.run([sys.executable, str(helpers.PLUGIN / "bin" / "orkestra"), "run", "--help"],
+                                  capture_output=True, text=True, encoding="utf-8",
+                                  env={**os.environ, "ORKESTRA_LANG": "en"}, timeout=60).stdout
+        self.assertIn("--no-allow-all", run_help)
+
+    def test_third_party_notices_cover_every_pinned_vendor_folder(self):
+        pinned = read(helpers.PLUGIN / "vendor" / "PINNED.md")
+        notices = read(ROOT / "THIRD_PARTY_NOTICES.md")
+        rows = re.findall(r"^\| (\w+) \| (https://\S+) \| ([0-9a-f]{7}) \|", pinned, re.M)
+        self.assertGreaterEqual(len(rows), 2)
+        for folder, url, commit in rows:
+            self.assertIn(f"`{folder}`", notices)
+            self.assertIn(url, notices)
+            self.assertIn(commit, notices)
+            self.assertTrue((helpers.PLUGIN / "vendor" / folder / "LICENSE").is_file(), folder)
+
+    def test_the_readmes_and_the_docs_index_point_at_the_record(self):
+        self.assertIn("docs/decisions.md", read(README_EN))
+        self.assertIn("docs/decisions.tr.md", read(README_TR))
+        index = read(ROOT / "docs" / "README.md")
+        self.assertIn("](decisions.md)", index)
+        self.assertIn("](decisions.tr.md)", index)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -11,7 +11,7 @@ from orkestra_core.engines import EngineError
 from orkestra_core.mcpinstall import McpError, install_copilot_file
 
 CONTEXT7 = {"type": "http", "url": "https://mcp.context7.com/mcp", "tools": ["*"]}
-PLAYWRIGHT = {"type": "stdio", "command": "npx", "args": ["@playwright/mcp@latest"], "tools": ["*"]}
+PLAYWRIGHT = {"type": "stdio", "command": "npx", "args": ["@playwright/mcp@0.0.83"], "tools": ["*"]}
 SERENA = {"type": "stdio", "command": "serena", "args": ["start-mcp-server"], "tools": ["*"]}
 
 

@@ -34,7 +34,7 @@ macOS and Linux:
 ```bash
 bash ./install.sh --dry-run         # optional: print the plan, change nothing
 bash ./install.sh                   # interactive; --yes accepts the defaults, --no-mcp skips optional MCP servers
-bash ./install.sh --skip-tests      # skip the installer's own test run (faster; you own the risk)
+bash ./install.sh --with-tests      # also run the plugin and bridge test suites first (about ten minutes)
 ```
 
 Windows (PowerShell or cmd), native, WSL is not required:
@@ -42,7 +42,7 @@ Windows (PowerShell or cmd), native, WSL is not required:
 ```powershell
 .\install.ps1 --dry-run
 .\install.ps1
-python install.py --yes --skip-tests
+python install.py --yes --with-tests
 ```
 
 `install.ps1` forwards every argument to `install.py`, which does the engine setup, the PATH shim and the health check
@@ -51,8 +51,9 @@ token with `python bridge/orkestra_bridge.py init`) and no `--refresh-vendor`. I
 (execution policy), or `python` opens the Microsoft Store, run `py -3 install.py` instead.
 The LaunchAgent (`launchd`) step is macOS-only and is skipped on Linux and Windows.
 
-Without `--skip-tests` the installer first runs the plugin and bridge test suites on your machine (a few minutes; CPU
-load changes the time) and stops if anything is red. Then it registers the checkout as the Claude Code marketplace
+The installer runs no tests unless you pass `--with-tests`; then it first runs the plugin and bridge test suites on your
+machine (about ten minutes; CPU load changes the time) and stops if anything is red (`--skip-tests` is accepted and does
+nothing). Then it registers the checkout as the Claude Code marketplace
 `orkestra-local`, installs `orkestra@orkestra-local`, runs `orkestra doctor`, offers the Cursor and Copilot setup, adds
 the PATH shim and, with `install.sh`, offers the optional MCP servers and the bridge token. Without the Claude Code CLI
 it continues with Cursor and Copilot only, and warns when no engine is ready. A failed Claude Code step or a failed
@@ -203,7 +204,7 @@ with exit code 1 and changes nothing: fix the file and run it again.
 | `orkestra: command not found` | Section 4: create the shim folder, put it on PATH, run `python3 plugins/orkestra/bin/orkestra setup` again. |
 | `doctor` fails the hook self-test | Re-run `orkestra setup`; on Windows check that `sh` and a real Python 3.9+ (not the Store stub) are on PATH. |
 | Cursor or Copilot guards do not fire | `orkestra cursor status` / `orkestra copilot status`, then open a **new** chat; for Copilot enable the host plugin (section 5). |
-| The installer stops on a red test | Open an issue with the failing test and the output of `orkestra doctor`. `--skip-tests` skips it at your own risk. |
+| The installer stops on a red test | Only with `--with-tests`. Open an issue with the failing test and the output of `orkestra doctor`. |
 | Output is in the wrong language | `orkestra lang show`, then `orkestra lang en` or `orkestra lang tr`. |
 
 More in the README: [FAQ and troubleshooting](README.md#faq-and-troubleshooting).

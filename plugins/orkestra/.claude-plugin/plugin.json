@@ -4,6 +4,8 @@
   "author": {
     "name": "Orkestra contributors"
   },
+  "homepage": "https://github.com/soft-ai-solutions/orkestra",
+  "repository": "https://github.com/soft-ai-solutions/orkestra",
   "license": "MIT",
   "keywords": [
     "sdlc",

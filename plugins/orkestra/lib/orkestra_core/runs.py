@@ -131,6 +131,40 @@ def request_scaffold(title: str, run_id: str, size: str, mode: str, engine: str,
             f"## {i18n.heading('raw_request', lang)}\n\n{request.strip()}\n")
 
 
+_TYPE_CUES = (
+    ("security", r"\b(security|vulnerab\w*|xss|csrf|injection|guvenlik)\b"),
+    ("docs", r"\b(docs?|readme|documentation|changelog|dokumantasyon|belge)\b"),
+    ("bugfix", r"\b(bug|fix|crash\w*|broken|regression|typo|hata|duzelt\w*|cokuyor)\b"),
+    ("refactor", r"\b(refactor\w*|clean\s*up|restructure|yeniden\s+yapilandir\w*|temizle)\b"),
+    ("perf", r"\b(perf\w*|slow|faster|speed\s*up|latency|optimi[sz]e|yavas|hizlandir\w*)\b"),
+    ("infra", r"\b(ci|cd|docker\w*|pipeline|build\s+script|infra\w*|kubernetes|terraform)\b"),
+    ("ui", r"\b(ui|ux|screen|button|layout|css|colou?r|theme|ekran|buton|renk|tema)\b"),
+)
+
+
+def classification_prefill(request: str, size: str) -> Dict[str, str]:
+    """Type / Size / Risk for the `## Classification` block of a fresh request, from the request text alone.
+
+    A suggestion for intake to verify (never written to request.md: the block's presence is what tells the tempo hint
+    that the model classified). Size is the run's size; Risk follows intent.py: a request below the risk floor of M is
+    low, a risky or large change is high, anything else medium."""
+    text = (request or "").strip()
+    low = P.ascii_fold(text).lower()          # the cues are ASCII: Turkish is matched with its letters folded
+    cue = next((name for name, pattern in _TYPE_CUES if re.search(pattern, low)), "")
+    if intent.is_advisory_request(text) and ("?" in text or not cue):
+        kind = "question" if "?" in text else "advice"     # "fix the crash when X is empty" reads as a question to intent.py
+    else:
+        kind = cue or "feature"
+    floor = intent.size_floor(text)
+    if floor in ("M", "L"):
+        risk = "high"
+    elif size in ("M", "L"):
+        risk = "medium"
+    else:
+        risk = "low"
+    return {"type": kind, "size": size, "risk": risk}
+
+
 def start_run(project: Path, title: str, request: str, size: str, mode: str, engine: str = "claude",
               approval_mode: str = "autopilot") -> Dict[str, Any]:
     """Open a run. One at a time per project: looking for an open run and creating the next one is a single step, so
@@ -362,7 +396,7 @@ def preconditions(project: Path, st: Dict[str, Any], target: str) -> List[str]:
                     problems.append("spec/plan changed after plan review; rerun plan-critic before autopilot approval")
         elif appr.get("hash") != spec_plan_hash(project, rid):
             problems.append("spec/plan changed after approval — rerun plan-critic and record a current approval")
-        problems += PP.check_plan(spec, plan, project, work_kind=kind_of(st), run_id=rid)
+        problems += PP.check_plan(spec, plan, project, work_kind=kind_of(st), run_id=rid, repro_first=False)
         # the baseline may run in the background during discover/clarify/plan (source cannot change before approval:
         # the phase guard), but it must be complete before the first edit
         if not (rdir / "gates-baseline.json").exists():
@@ -507,7 +541,27 @@ def write_timing(project: Path, st: Dict[str, Any]) -> None:
     write_text_atomic(paths.feature_dir(project, st["run_id"]) / "timing.md", "\n".join(lines) + "\n")
 
 
+def escalate_size_at_plan(project: Path, run_id: str) -> bool:
+    """Leaving plan: an XS/S run whose plan is risky or large is raised to M (never lowered, M/L untouched), so the
+    plan-critic and adversary rules of M apply. Idempotent: once M, nothing more happens. Software runs only."""
+    st0 = load_state(project, run_id)
+    if st0.get("phase") != "plan" or st0.get("size") not in ("XS", "S") or kind_of(st0) in ("writing", "general"):
+        return False
+    tasks = PP.parse_tasks(read_text(paths.feature_dir(project, run_id) / "plan.md"))
+    why = PP.size_escalation_reason(tasks) if tasks else ""
+    if not why:
+        return False
+    with StateTxn(project, run_id) as st:
+        old = st.get("size")
+        if st.get("phase") != "plan" or old not in ("XS", "S"):
+            return False
+        st["size"] = "M"
+    ledger(project, run_id, i18n.t("runs.size_escalated", old=old, new="M", why=why))
+    return True
+
+
 def phase_next(project: Path, run_id: str, note: str = "") -> Tuple[str, str]:
+    escalate_size_at_plan(project, run_id)
     pre = _precheck(project, run_id)
     with StateTxn(project, run_id) as st:
         cur = st["phase"]

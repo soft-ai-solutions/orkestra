@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Cross-platform Orkestra installer (standard library only). Prefer this on Windows; Unix may also use install.sh.
 
-    python install.py                      install: tests, engine setup, PATH shim, health check
+    python install.py                      install: engine setup, PATH shim, health check
+    python install.py --with-tests         ...and run the plugin and bridge test suites first (about 10 minutes;
+                                           skipped by default, --skip-tests is accepted and does nothing)
     python install.py --dry-run            print the plan, change nothing
     python install.py --uninstall          remove what this installer set up (plugin registration, Cursor and Copilot
                                            hooks, PATH shim); ~/.orkestra (settings, runs, bridge token) is kept
@@ -65,9 +67,10 @@ _MESSAGES = {
     "step_tests": ("Running the plugin and bridge test suites (a few minutes; depends on system load)",
                    "Eklenti ve bridge testleri \u00e7al\u0131\u015f\u0131yor (birka\u00e7 dakika; sistem y\u00fck\u00fcne g\u00f6re de\u011fi\u015fir)"),
     "would_tests": ("would run the plugin and bridge test suites", "eklenti ve bridge testleri \u00e7al\u0131\u015ft\u0131r\u0131l\u0131rd\u0131"),
-    "tests_skipped": ("Tests skipped (--skip-tests)", "Testler atland\u0131 (--skip-tests)"),
-    "tests_failed": ("The tests failed: install stopped. Fix them or use --skip-tests.",
-                     "Testler ge\u00e7medi: kurulum durduruldu. D\u00fczeltin ya da --skip-tests kullan\u0131n."),
+    "tests_skipped": ("Tests skipped (add --with-tests to run them)",
+                      "Testler atland\u0131 (\u00e7al\u0131\u015ft\u0131rmak i\u00e7in --with-tests ekleyin)"),
+    "tests_failed": ("The tests failed: install stopped. Fix them or install without --with-tests.",
+                     "Testler ge\u00e7medi: kurulum durduruldu. D\u00fczeltin ya da --with-tests olmadan kurun."),
     "step_setup": ("Setting up the detected engines and the PATH shim", "Bulunan motorlar ve PATH k\u0131sayolu kuruluyor"),
     "step_doctor": ("Health check", "Sa\u011fl\u0131k kontrol\u00fc"),
     "doctor_warned": ("doctor warned about some checks (see above)", "doctor baz\u0131 kontrollerde uyard\u0131 (yukar\u0131ya bak)"),
@@ -336,7 +339,7 @@ def _engines():
 
 def _plan_install(args):
     """What an install would do. Reads only: the libraries' own dry-run modes list the file changes."""
-    _plan(_m("tests_skipped") if args.skip_tests else _m("would_tests"))
+    _plan(_m("would_tests") if args.with_tests else _m("tests_skipped"))
     found = _engines()
     cur, cop, pik = _kits()
     _plan(_m("would_run", cmd=_shown([sys.executable, BIN, "setup"] + (["--yes"] if args.yes else []))))
@@ -381,7 +384,7 @@ def install(args):
         return 0
 
     py = sys.executable
-    if not args.skip_tests:
+    if args.with_tests:
         _say(_m("step_tests"))
         for suite in (PLUGIN / "tests", ROOT / "bridge" / "tests"):
             if run([py, "-m", "unittest", "discover", "-s", str(suite), "-q"], check=False) != 0:
@@ -616,8 +619,10 @@ def build_parser():
                       formatter_class=formatter_class, add_help=False)
     ap.add_argument("-h", "--help", action="help", help=_t("help.opt.help", "show this help message and exit"))
     ap.add_argument("--yes", "-y", action="store_true", help=_t("install.help_yes", "non-interactive defaults"))
+    ap.add_argument("--with-tests", action="store_true",
+                    help=_t("install.help_with_tests", "run the plugin and bridge test suites first (about 10 minutes)"))
     ap.add_argument("--skip-tests", action="store_true",
-                    help=_t("install.help_skip_tests", "skip the plugin and bridge test suites"))
+                    help=_t("install.help_skip_tests", "accepted and ignored: the tests are skipped unless --with-tests"))
     ap.add_argument("--no-mcp", action="store_true",
                     help=_t("install.help_no_mcp", "accepted and ignored: only install.sh has MCP steps"))
     ap.add_argument("--dry-run", action="store_true", help=_m("help_dry_run"))

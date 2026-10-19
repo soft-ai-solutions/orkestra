@@ -163,6 +163,8 @@ EN: Dict[str, str] = {
     "help.cmd.setup": "detect Claude/Cursor/Copilot and install Orkestra for each (interactive, or --yes)",
     "help.cmd.doctor": "check this machine: python, git, hooks, engines, language",
     "help.cmd.version": "print the Orkestra version",
+    "help.cmd.demo": "30-second local proof: guards deny a force-push and an early edit, a tiny run shows its evidence (no model)",
+    "help.opt.demo_keep": "keep the temporary demo project instead of deleting it",
     "help.cmd.lang": "show or set the language of human-facing output: show | en | tr | auto",
 
     "help.lang_hint": "change it: orkestra lang en | tr | auto (or --lang en|tr for a single command)",
@@ -324,6 +326,8 @@ TR: Dict[str, str] = {
     "help.cmd.setup": "Claude/Cursor/Copilot algıla ve her biri için Orkestra'yı kur (etkileşimli ya da --yes)",
     "help.cmd.doctor": "bu makineyi denetle: python, git, hook'lar, motorlar, dil",
     "help.cmd.version": "Orkestra sürümünü yazdır",
+    "help.cmd.demo": "30 saniyelik yerel kanıt: korumalar force-push'u ve erken düzenlemeyi reddeder, küçük bir run kanıtını gösterir (model yok)",
+    "help.opt.demo_keep": "geçici demo projesini silmek yerine sakla",
     "help.cmd.lang": "insanın okuduğu çıktının dilini göster veya ayarla: show | en | tr | auto",
 
     "help.lang_hint": "değiştirmek için: orkestra lang en | tr | auto (tek komut için --lang en|tr)",

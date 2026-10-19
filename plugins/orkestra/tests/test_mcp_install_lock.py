@@ -10,7 +10,8 @@ INSTALL_SH = helpers.PLUGIN.parent.parent / "install.sh"
 
 _ARGV = (
     "claude mcp add --transport http context7 https://mcp.context7.com/mcp -s user",
-    "claude mcp add playwright -s user -- npx @playwright/mcp@latest",
+    # pinned to an exact version (never @latest): PLAYWRIGHT_MCP_VERSION in install.sh, checked below
+    'claude mcp add playwright -s user -- npx @playwright/mcp@"$PLAYWRIGHT_MCP_VERSION"',
     "claude mcp add --scope user serena -- serena start-mcp-server --context claude-code --project-from-cwd",
 )
 
@@ -36,3 +37,11 @@ class TestMcpInstallLock(unittest.TestCase):
             self.assertEqual(block.count(argv), 1, argv)
             self.assertEqual(text.count(argv), 1, argv)
         self.assertEqual(_ASK_DEFAULT.findall(block), ["y", "y", "n"])
+        self.assertRegex(text, r'(?m)^PLAYWRIGHT_MCP_VERSION="\d+\.\d+\.\d+"$')
+
+    def test_python_installer_pin_matches_install_sh(self):
+        """`orkestra mcp install` pins the same exact @playwright/mcp version as install.sh (never @latest)."""
+        from orkestra_core import mcpinstall
+        text = INSTALL_SH.read_text(encoding="utf-8")
+        version = re.search(r'(?m)^PLAYWRIGHT_MCP_VERSION="(\d+\.\d+\.\d+)"$', text).group(1)
+        self.assertEqual(mcpinstall.PLAYWRIGHT_MCP_PACKAGE, "@playwright/mcp@" + version)

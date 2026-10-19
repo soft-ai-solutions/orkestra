@@ -150,6 +150,18 @@ language are agreed. The places to touch, in order:
 8. Tests: widen every loop that names `en` and `tr` (`test_i18n*`, `test_cli_ux`, `test_bilingual_e2e`, the bridge and
    OpenClaw suites), and add an end-to-end run in the new language next to `test_bilingual_e2e`.
 
+## Releasing and packaging
+
+Nothing here publishes. `scripts/release.sh X.Y.Z` is a dry run; `--apply` writes. It refuses a dirty tree, a version
+that is not newer and an empty `## Unreleased` section, sets the one version in every file that carries it, dates the
+changelog and builds `orkestra-X.Y.Z.tar.gz` plus `SHA256SUMS` in `dist/`. It prints the `gh release create --draft`
+command; running it, uploading to PyPI, a Homebrew tap or a marketplace is the owner's decision (accounts, a name check
+and an explicit go-ahead; see `docs/decisions.md`). `scripts/release.sh --check` fails on version drift.
+
+`pyproject.toml` packages `plugins/orkestra` (minus tests) as `orkestra_plugin` plus the `orkestra_cli` entry point, so
+`pipx install .` and `uvx --from . orkestra` work. Try packaging in a temporary home and a copy of the checkout
+(`UV_CACHE_DIR`, `UV_TOOL_DIR` and `HOME` in a temp folder), never against your real PATH or `~/.local/bin`.
+
 ## Before you open a pull request
 
 The pull request template has the checklist. In short: both Python suites green on Python 3.9 and your newest Python,

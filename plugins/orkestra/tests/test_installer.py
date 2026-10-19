@@ -134,9 +134,15 @@ class TestInstallPyDryRun(Sandbox):
         self.assertIn("çalıştırılırdı", tr.stdout)
         self.assertNotIn(EM_DASH, en.stdout + tr.stdout)
 
-    def test_the_plan_lists_the_tests_unless_they_are_skipped(self):
-        self.assertIn("would run the plugin and bridge test suites", self.run_py("--dry-run").stdout)
-        self.assertIn("Tests skipped (--skip-tests)", self.run_py("--dry-run", "--skip-tests").stdout)
+    def test_the_tests_are_skipped_by_default_and_run_with_with_tests(self):
+        skipped = "Tests skipped (add --with-tests to run them)"
+        self.assertIn(skipped, self.run_py("--dry-run").stdout)
+        self.assertIn(skipped, self.run_py("--dry-run", "--skip-tests").stdout, "--skip-tests is a no-op alias")
+        plan = self.run_py("--dry-run", "--with-tests").stdout
+        self.assertIn("would run the plugin and bridge test suites", plan)
+        self.assertNotIn("Tests skipped", plan)
+        self.assertIn("--with-tests ekleyin", self.run_py("--dry-run", lang="tr").stdout)
+        self.assertIn("--with-tests", self.run_py("--help").stdout)
 
     def test_uninstall_dry_run_changes_nothing_even_after_a_real_install(self):
         self.assertEqual(self.run_py("--yes", "--skip-tests").returncode, 0)
@@ -425,10 +431,23 @@ class TestInstallPyGates(Sandbox):
             calls.append(list(map(str, argv)))
             return 1 if "unittest" in map(str, argv) else 0
 
-        rc, out, err = self.main(["--yes"], run=fake_run)
+        rc, out, err = self.main(["--yes", "--with-tests"], run=fake_run)
         self.assertEqual(rc, 1)
         self.assertIn("The tests failed: install stopped", err)
         self.assertEqual(len(calls), 1, "no setup after a red test suite")
+
+    def test_a_default_install_runs_no_test_suite(self):
+        for flags in ([], ["--skip-tests"]):
+            calls = []
+
+            def fake_run(argv, check=True, dry=False, calls=calls):
+                calls.append(list(map(str, argv)))
+                return 0
+
+            rc, out, err = self.main(["--yes"] + flags, run=fake_run)
+            self.assertEqual(rc, 0, err)
+            self.assertFalse([c for c in calls if "unittest" in c], calls)
+            self.assertTrue([c for c in calls if "setup" in c], "the setup still runs")
 
     def test_a_failed_setup_or_health_check_with_an_engine_present_is_a_failed_install(self):
         """`python install.py --yes && next-step` in CI or a provisioning script must not go on when nothing was set up."""
@@ -529,7 +548,7 @@ class TestInstallSh(Sandbox):
     def test_help_lists_every_flag_and_points_windows_users_to_install_py(self):
         cp = self.run_sh("--help")
         self.assertEqual(cp.returncode, 0, cp.stderr)
-        for flag in ("--yes", "--no-mcp", "--skip-tests", "--dry-run", "--uninstall", "--purge", "--refresh-vendor",
+        for flag in ("--yes", "--no-mcp", "--with-tests", "--skip-tests", "--dry-run", "--uninstall", "--purge", "--refresh-vendor",
                      "install.py"):
             self.assertIn(flag, cp.stdout)
         self.assertEqual(self.snapshot(), {})
@@ -562,6 +581,46 @@ class TestInstallSh(Sandbox):
     def test_dry_run_never_asks_a_question(self):
         cp = self.run_sh("--dry-run", "--skip-tests", stdin="")
         self.assertEqual(cp.returncode, 0, cp.stderr)
+
+    def test_the_tests_are_skipped_by_default_and_with_tests_plans_them(self):
+        self.assertNotIn("test suites", self.run_sh("--dry-run").stdout)
+        self.assertNotIn("test suites", self.run_sh("--dry-run", "--skip-tests").stdout)
+        self.assertIn("run the plugin and bridge Python test suites", self.run_sh("--dry-run", "--with-tests").stdout)
+        self.assertIn("bridge Python testlerini çalıştır", self.run_sh("--dry-run", "--with-tests", lang="tr").stdout)
+
+    def fake_claude(self):
+        """A `claude` and an `npx` that do nothing: the MCP steps run (as a plan) as if Claude Code were installed."""
+        fake = self.tmp / "fakeclaude"
+        fake.mkdir(exist_ok=True)
+        for name in ("claude", "npx"):
+            (fake / name).write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            (fake / name).chmod(0o755)
+        return {"PATH": str(fake) + os.pathsep + self.path()}
+
+    def test_playwright_is_pinned_and_the_context7_endpoint_is_stated(self):
+        text = INSTALL_SH.read_text(encoding="utf-8")
+        self.assertNotIn("@latest", text)
+        pin = re.search(r'(?m)^PLAYWRIGHT_MCP_VERSION="(\d+\.\d+\.\d+)"$', text)
+        self.assertIsNotNone(pin, "an exact @playwright/mcp version")
+        extra = self.fake_claude()
+        before = self.snapshot()
+        for lang, words in (("en", ("third-party", "https://mcp.context7.com/mcp", "sent to it as queries", "--no-mcp")),
+                            ("tr", ("üçüncü taraf", "https://mcp.context7.com/mcp", "sorgu olarak", "--no-mcp"))):
+            cp = self.run_sh("--dry-run", "--yes", lang=lang, **extra)
+            self.assertEqual(cp.returncode, 0, cp.stdout + cp.stderr)
+            for word in words:
+                self.assertIn(word, cp.stdout, lang)
+            self.assertIn("npx @playwright/mcp@" + pin.group(1), cp.stdout)
+            self.assertNotIn("@latest", cp.stdout)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_no_mcp_skips_every_mcp_step_and_the_notice(self):
+        cp = self.run_sh("--dry-run", "--yes", "--no-mcp", **self.fake_claude())
+        self.assertEqual(cp.returncode, 0, cp.stdout + cp.stderr)
+        self.assertNotIn("mcp add", cp.stdout)
+        self.assertNotIn("Context7", cp.stdout)
+        with_mcp = self.run_sh("--dry-run", "--yes", **self.fake_claude())
+        self.assertIn("mcp add --transport http context7", with_mcp.stdout)
 
     def test_uninstall_is_delegated_to_install_py(self):
         before = self.snapshot()
@@ -850,7 +909,7 @@ class TestRound2InstallSh(Round2):
         tr = self.run_sh("--help", lang="tr")
         for cp in (en, tr):
             self.assertEqual(cp.returncode, 0, cp.stderr)
-            for flag in ("--yes", "--no-mcp", "--skip-tests", "--dry-run", "--uninstall", "--purge", "--refresh-vendor", "install.py"):
+            for flag in ("--yes", "--no-mcp", "--with-tests", "--skip-tests", "--dry-run", "--uninstall", "--purge", "--refresh-vendor", "install.py"):
                 self.assertIn(flag, cp.stdout)
         self.assertIsNone(TR_LETTERS.search(en.stdout))
         self.assertRegex(tr.stdout, TR_LETTERS)

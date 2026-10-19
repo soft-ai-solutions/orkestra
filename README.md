@@ -19,7 +19,7 @@ macOS and Linux (Windows: experimental)
 and secret reads are denied by hooks, and the report carries machine-written evidence.
 - **You see it as it happens** with `orkestra watch` and `orkestra next`.
 
-A real session on a demo project with one unittest file and no commits yet (commands run in a temporary home; only the temporary paths are shortened to `~` and the output's two em dashes are written as `:`; nothing else is edited):
+A real session on a demo project with one unittest file and no commits yet (commands run in a temporary home; the temporary paths are shortened to `~` and the temporary home is written as `~/.orkestra`, the output's one em dash (in the evidence header) is written as `:`, and the blank line `watch` prints at the end is dropped; nothing else is edited):
 
 ```text
 $ orkestra init -p .
@@ -28,19 +28,21 @@ detected gates: unittest=`python3 -m unittest discover -s . -q`
 $ orkestra start "add CSV export to the order list"
 run started: 001-add-csv-export-to-the-order-list in ~/demo
 size: M (inferred from request; override with --size XS|S|M|L)
-baseline: git=True head=None uncommitted_files=1
-NOTE: the working tree already had uncommitted changes. They are backed up and will never be attributed to this run. Tell the user.
-artifacts: ~/demo/.orkestra/features/001-add-csv-export-to-the-order-list  (short path: .orkestra/current/ : no globs needed)
+baseline: git, no commits yet · uncommitted files: 1
+NOTE: the working tree already had uncommitted changes. They are backed up and will never be attributed to this run.
+artifacts: .orkestra/features/001-add-csv-export-to-the-order-list/ (short path: .orkestra/current/, no globs needed)
 next action: Classify the request (size XS/S/M/L, project, risk) into request.md → `orkestra phase next`.
+suggested classification (verify it, correct what is wrong, then append it): Type: feature · Size: M · Risk: medium
 [orkestra:bind] project=~/demo run=001-add-csv-export-to-the-order-list home=~/.orkestra
 $ orkestra watch --once
 ━━ demo · 001-add-csv-export-to-the-order-list · "add CSV export to the order list" (M) ━━━━━━━━━━━━━━━━━━━━━━
- phase    intake  › discover › clarify › plan › approve › implement › verify › review › deliver › done · in this phase for 0s
+ phase    intake  › discover › clarify › plan › approve › implement › verify › review › deliver › done · in this phase for 1s
  status  ● intake phase open · run state updated 0s ago; no hook activity yet
- clock   Total 0s · intake: 0s
+ pace    total 1s
+ clock   Total 1s · intake: 1s
  session 0 bound: no open agent session is working on this run
    (no activity logged yet: logging starts with the first tool calls after this plugin version is loaded)
- ledger  2026-10-19 22:31 run started: 'add CSV export to the order list' (size M, mode interactive, engine c…
+ ledger  2026-10-19 23:52 run started: 'add CSV export to the order list' (size M, mode interactive, engine c…
 $ orkestra next
 next [intake]: classify the request: append `## Classification` to request.md (`orkestra playbook intake`)
 why: request.md has no classification yet
@@ -99,14 +101,13 @@ In a Claude Code or Copilot chat type `/orkestra:run <request>`, in Cursor `/ork
 <details>
 <summary>Full installer and Windows variants</summary>
 
-The full installer does the same and more: it runs the plugin and bridge test suites on your machine first (a few
-minutes, and it stops if anything is red), registers the checkout as a Claude Code marketplace
+The full installer does the same and more: it registers the checkout as a Claude Code marketplace
 (`orkestra@orkestra-local`; Claude Code runs the copy it caches from `plugins/orkestra`), installs the Cursor and Copilot hooks you
 accept and, with `install.sh` only, adds optional MCP servers and creates the bridge token.
 
 ```bash
 bash ./install.sh                  # interactive (macOS and Linux)
-bash ./install.sh --yes --skip-tests   # accept the defaults, skip the test suites (you own the risk)
+bash ./install.sh --yes --with-tests   # accept the defaults and run the test suites first (about ten minutes)
 bash ./install.sh --dry-run        # print the plan and change nothing
 bash ./install.sh --uninstall      # undo the registrations (add --purge to delete ~/.orkestra and its bridge token too)
 ```
@@ -122,9 +123,28 @@ python install.py --dry-run
 
 </details>
 
+<details>
+<summary>Install with uv or pipx</summary>
+
+`pyproject.toml` builds the package `orkestra` (no runtime dependencies). Proven on this repository from a local
+checkout path in a temporary home: `uvx` ran `orkestra --version` and `orkestra doctor`, and `uv tool install` put the
+`orkestra` command on PATH. `pipx` is untested here, and the `git+https://` form works only once `pyproject.toml` is on the
+remote branch. Use a persistent install for `orkestra setup`; `uvx` runs from a throw-away cache. Nothing is published
+to PyPI or Homebrew. Details and limits: [docs/decisions.md](docs/decisions.md).
+
+```bash
+uv tool install .                  # or: pipx install .   (run inside the checkout)
+uvx --from . orkestra --version
+```
+
+</details>
+
 `setup` and the installers put an `orkestra` shim on your PATH, but only into a folder that already exists:
 `~/.local/bin` (or the folder in `ORKESTRA_SHIM_DIR`). If `orkestra` is not found afterwards, see the
 [FAQ](#faq-and-troubleshooting). Inside a Claude Code session the command is available anyway.
+
+No engine yet? `orkestra demo` runs a one-second tour in a temporary project: a real hook denies a force-push, and it
+shows evidence, a gate and the watch view. It touches none of your files.
 
 First-time details, including Windows and Copilot host settings: [ONBOARDING.md](ONBOARDING.md).
 
@@ -530,7 +550,7 @@ you switch on: the optional bridge talks to Telegram (`api.telegram.org`) when a
 the pinned reference files from GitHub.
 
 **The installer stopped on a red test.** That is the point of the pre-flight; please open an issue with the output of
-`orkestra doctor` and the failing test. `--skip-tests` skips it at your own risk.
+`orkestra doctor` and the failing test. The installer runs tests only with `--with-tests` (`--skip-tests` is still accepted and does nothing).
 
 **Reporting a bug.** Use the issue forms and paste `orkestra --version`, your OS, Python version, engine and the output
 of `orkestra doctor`. Security problems go to [SECURITY.md](SECURITY.md), not to a public issue.
@@ -555,6 +575,11 @@ of `orkestra doctor`. Security problems go to [SECURITY.md](SECURITY.md), not to
   The CLI was exercised end to end, the IDE window less. Token usage is not reported for Cursor runs.
 - Windows is supported natively but less exercised than macOS and Linux (CI is configured to run the suites on `windows-latest`;
   there is no maintainer machine). The watchdog only notifies there, there is no fast watcher, and desktop notifications exist for macOS and Linux.
+- Copilot runs start with allow-all ON by default (tools, paths and URLs without a prompt; Orkestra's hooks and excluded
+  tools still apply). `orkestra copilot status` and the start of `orkestra run --engine copilot` say so. Turn it off with
+  `--no-allow-all` or `engine.copilot.allow_all` set to `false`.
+- Not done, on purpose: PyPI, Homebrew or marketplace listing, benchmarks, model tiering, and a trademark check of the name.
+  The reasons and what each would need: [docs/decisions.md](docs/decisions.md).
 - One machine, one user. No hosted service, no telemetry: nothing leaves your machine except what the model provider's
   own client sends and the optional features you configure yourself (Telegram, a callback or webhook URL; see the FAQ).
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 from . import i18n
 from . import paths
@@ -184,6 +184,55 @@ def _plain(text: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"`+", "", text)).strip()
 
 
+def _toml_section_value(path: Path, sections: Tuple[str, ...], key: str) -> str:
+    """`key = "value"` inside one of the `[section]` tables of a TOML file (no tomllib on 3.9; a plain line scan)."""
+    current = ""
+    for ln in _head_lines(path, 400):
+        s = ln.strip()
+        if s.startswith("["):
+            current = s.strip("[] ").strip()
+            continue
+        match = re.match(rf"^{key}\s*=\s*(?:\"([^\"]*)\"|'([^']*)')\s*(?:#.*)?$", s)
+        if match and current in sections:
+            return match.group(1) if match.group(1) is not None else match.group(2)
+    return ""
+
+
+def _manifest_facts(project: Path) -> Tuple[str, str, str]:
+    """(name, description, file) from the first project manifest that names the project; empty strings when none does."""
+    if (project / "package.json").is_file():
+        data = read_json(project / "package.json", default={}) or {}
+        if isinstance(data, dict):
+            name, desc = data.get("name"), data.get("description")
+            if isinstance(name, str) and name.strip():
+                return name.strip(), desc.strip() if isinstance(desc, str) else "", "package.json"
+    if (project / "pyproject.toml").is_file():
+        path = project / "pyproject.toml"
+        tables = ("project", "tool.poetry")
+        name = _toml_section_value(path, tables, "name")
+        if name:
+            return name, _toml_section_value(path, tables, "description"), "pyproject.toml"
+    if (project / "Cargo.toml").is_file():
+        path = project / "Cargo.toml"
+        name = _toml_section_value(path, ("package",), "name")
+        if name:
+            return name, _toml_section_value(path, ("package",), "description"), "Cargo.toml"
+    if (project / "go.mod").is_file():
+        for ln in _head_lines(project / "go.mod", 20):
+            match = re.match(r"^module\s+(\S+)", ln.strip())
+            if match:
+                return match.group(1), "", "go.mod"
+    return "", "", ""
+
+
+def _readme_title(project: Path) -> str:
+    for ln in _head_lines(project / "README.md", 60):
+        match = re.match(r"^#\s+(\S.*)$", ln.strip())
+        if match:
+            return _plain(match.group(1))[:100]
+    return ""
+
+
 def observe(project: Path) -> bool:
     """Fill PROJECT.md from files that exist. A filled file is left as it is. Returns True when it writes."""
     project = Path(project)
@@ -202,9 +251,19 @@ def _observed(project: Path) -> str:
              "Written from files that exist in this checkout. A line that says unknown was not in those files.",
              ""]
     lines.append("## Summary")
+    man_name, man_desc, man_file = _manifest_facts(project)
+    if man_file:
+        lines.append(f"- Name: {_plain(man_name)[:100]} (`{man_file}`)")
+    title = _readme_title(project)
+    if title:
+        lines.append(f"- Title: {title} (`README.md`)")
     purpose = ""
     purpose_from = ""
+    if man_desc.strip():
+        purpose, purpose_from = man_desc.strip()[:160], man_file
     for name in ("AGENTS.md", "CLAUDE.md", "README.md"):
+        if purpose_from:
+            break
         prose = _first_prose(project / name)
         if prose:
             purpose, purpose_from = prose, name

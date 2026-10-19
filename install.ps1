@@ -3,7 +3,7 @@
 #   .\install.ps1                      install
 #   .\install.ps1 --dry-run            print the plan, change nothing
 #   .\install.ps1 --uninstall [--purge]
-#   .\install.ps1 --yes --skip-tests
+#   .\install.ps1 --yes --with-tests     (the ~10 minute test suites are skipped unless --with-tests)
 #
 # This file is plain ASCII on purpose: Windows PowerShell 5.1 reads a script without a byte order mark in the ANSI
 # code page, so Turkish letters are written as \u escapes and expanded with [regex]::Unescape.

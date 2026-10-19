@@ -12,10 +12,10 @@ import helpers
 from orkestra_core.mcpinstall import McpError, install_claude, install_copilot
 
 COPILOT_CONTEXT7 = ["mcp", "add", "--transport", "http", "context7", "https://mcp.context7.com/mcp"]
-COPILOT_PLAYWRIGHT = ["mcp", "add", "playwright", "--", "npx", "@playwright/mcp@latest"]
+COPILOT_PLAYWRIGHT = ["mcp", "add", "playwright", "--", "npx", "@playwright/mcp@0.0.83"]
 COPILOT_SERENA = ["mcp", "add", "serena", "--", "serena", "start-mcp-server"]
 CLAUDE_CONTEXT7 = ["mcp", "add", "--transport", "http", "context7", "https://mcp.context7.com/mcp", "-s", "user"]
-CLAUDE_PLAYWRIGHT = ["mcp", "add", "playwright", "-s", "user", "--", "npx", "@playwright/mcp@latest"]
+CLAUDE_PLAYWRIGHT = ["mcp", "add", "playwright", "-s", "user", "--", "npx", "@playwright/mcp@0.0.83"]
 CLAUDE_SERENA = [
     "mcp", "add", "--scope", "user", "serena", "--", "serena", "start-mcp-server",
     "--context", "claude-code", "--project-from-cwd",

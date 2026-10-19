@@ -11,7 +11,7 @@ from orkestra_core.engines import EngineError
 from orkestra_core.mcpinstall import McpError, install_cursor
 
 CONTEXT7 = {"url": "https://mcp.context7.com/mcp"}
-PLAYWRIGHT = {"command": "npx", "args": ["@playwright/mcp@latest"]}
+PLAYWRIGHT = {"command": "npx", "args": ["@playwright/mcp@0.0.83"]}
 SERENA = {"command": "serena", "args": ["start-mcp-server"]}
 
 

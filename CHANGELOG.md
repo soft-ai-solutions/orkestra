@@ -6,6 +6,16 @@ Orkestra now serves people in English and Turkish (English is the default), runs
 with Python 3.9 to 3.14, and its repository documentation is available in both languages. Entries up to 1.6.0 below
 were written in Turkish and are kept as they were.
 
+### Decisions, safety notice and documentation
+- **Decision record:** `docs/decisions.md` (and `docs/decisions.tr.md`) records distribution, marketplace id, licence and
+  notices, safety defaults, cost and privacy, including what is deliberately not done: no PyPI, Homebrew or marketplace
+  listing, no benchmarks or model tiering, no trademark check of the name "Orkestra".
+- **Visible allow-all:** `orkestra copilot status` and the start of `orkestra run --engine copilot` print a notice while
+  Copilot allow-all is on, with the two ways to turn it off (`--no-allow-all`, `engine.copilot.allow_all`).
+- **Docs match the code:** both READMEs, both onboarding pages, SECURITY and CONTRIBUTING describe the uv/pipx install
+  (proven from a local checkout in a temporary home), `orkestra demo`, the installers skipping tests unless
+  `--with-tests`, and the release script (dry run by default, never publishes).
+
 ### Copilot: model, effort, context, allow-all
 - **Copilot CLI profile:** `engine.copilot` gains `context` (`long_context`) and `allow_all` (`true`) next to `model`
   (`gpt-6-luna`) and `reasoning_effort` (`max`). allow-all passes `--allow-all-tools --allow-all-paths --allow-all-urls`
