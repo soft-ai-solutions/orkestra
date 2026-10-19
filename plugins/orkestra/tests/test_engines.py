@@ -85,11 +85,15 @@ class TestEngineUnits(unittest.TestCase):
         opts = {"model": "gpt-6-luna", "reasoning_effort": "max", "plugin_dir": "/plugins/orkestra",
                 "approval_mode": "autopilot", "max_autopilot_continues": 7}
         spec = EN.headless_command("copilot", "/bin/copilot", "copilot-S1", "do it", True, opts)
-        self.assertEqual(spec["argv"], ["/bin/copilot", "-p", "--output-format", "json", "--allow-all-tools",
+        self.assertEqual(spec["argv"], ["/bin/copilot", "--output-format", "json", "--allow-all-tools",
+                                        "--allow-all-paths", "--allow-all-urls",
                                         "--excluded-tools", EN.COPILOT_EXCLUDED_TOOLS,
                                         "--autopilot", "--no-ask-user", "--model", "gpt-6-luna",
                                         "--reasoning-effort", "max", "--max-autopilot-continues", "7",
-                                        "--plugin-dir", "/plugins/orkestra", "--session-id", "S1", "do it"])
+                                        "--plugin-dir", "/plugins/orkestra", "--session-id=S1", "--prompt=do it"])
+        self.assertNotIn("-p", spec["argv"])             # a bare -p would swallow the next option as its value
+        dash = EN.headless_command("copilot", "/bin/copilot", "copilot-S1", "- fix it", True, opts)["argv"]
+        self.assertEqual(dash[-1], "--prompt=- fix it")
         self.assertNotIn("task", spec["argv"][-1])
         for name in ("task", "list_agents", "read_agent", "write_agent"):
             self.assertIn(name, EN.COPILOT_EXCLUDED_TOOLS)
@@ -98,7 +102,7 @@ class TestEngineUnits(unittest.TestCase):
                                      dict(opts, approval_mode="manual"))["argv"]
         self.assertNotIn("--autopilot", manual)
         self.assertNotIn("--no-ask-user", manual)
-        self.assertIn("--resume", manual)
+        self.assertIn("--resume=S1", manual)
 
     def test_copilot_interactive_command_has_autopilot_model_and_effort(self):
         argv = EN.interactive_command("copilot", "/bin/copilot", "start", {
@@ -106,6 +110,7 @@ class TestEngineUnits(unittest.TestCase):
             "approval_mode": "autopilot",
         })
         self.assertEqual(argv, ["/bin/copilot", "-i", "start", "--allow-all-tools",
+                                "--allow-all-paths", "--allow-all-urls",
                                 "--excluded-tools", EN.COPILOT_EXCLUDED_TOOLS,
                                 "--autopilot", "--no-ask-user",
                                 "--model", "gpt-6-luna", "--reasoning-effort", "max", "--plugin-dir", "/plugins/orkestra"])
@@ -190,6 +195,8 @@ class TestBinaries(helpers.Sandbox):
         hooks = {event: [{"command": f"python copilot_hook.py {event}"}]
                  for event in ("UserPromptSubmit", "PreToolUse", "PostToolUse")}
         hooks_path.write_text(json.dumps({"hooks": hooks}))
+        self.assertFalse(EN.copilot_hooks_active(str(plugin)))      # no plugin.json: Copilot would not load it
+        (plugin / "plugin.json").write_text("{}")
         self.assertTrue(EN.copilot_hooks_active(str(plugin)))
 
         hooks.pop("PreToolUse")
@@ -915,10 +922,10 @@ class TestCursorKit(helpers.Sandbox):
         english = self.kit("install", "--dry-run", lang="en").stdout
         turkish = self.kit("install", "--dry-run", lang="tr").stdout
         self.assertIn("would link ", english)
-        self.assertIn("would update hooks.json: orkestra entries for", english)
+        self.assertRegex(english, r"would update \S*hooks\.json: orkestra entries for")
         self.assertIn("cursor: dry run, nothing written", english)
         self.assertIn("şunu yapardı: bağla ", turkish)
-        self.assertIn("şunu yapardı: hooks.json güncelle: ", turkish)
+        self.assertRegex(turkish, r"şunu yapardı: \S*hooks\.json güncelle: ")
         self.assertIn("cursor: deneme modu, hiçbir şey yazılmadı", turkish)
         for word in ("link ", "update hooks.json", "dry run", "would "):
             self.assertNotIn(word, turkish, word)
@@ -946,7 +953,9 @@ class TestCursorKit(helpers.Sandbox):
         from orkestra_core import cursorkit as CK
         out = self.tmp / "assets"
         with mock.patch.object(CLI, "_ASKER", "claude"), mock.patch.object(CK, "ASSETS", out):
-            self.assertEqual(CLI.cmd_cursor(argparse.Namespace(action="build")), 0)
+            import contextlib, io
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(CLI.cmd_cursor(argparse.Namespace(action="build")), 0)
             self.assertTrue(any(out.rglob("*.md")))
             for action in ("install", "uninstall", "status"):
                 with self.assertRaises(CLI.OrkestraError):
@@ -1252,9 +1261,11 @@ class TestCopilotKit(helpers.Sandbox):
         self.assertEqual(doc["hooks"]["UserPromptSubmit"][0], mine["hooks"]["UserPromptSubmit"][0])
         self.assertEqual(doc["hooks"]["SessionStart"][0], mine["hooks"]["SessionStart"][0])
         for event in ("UserPromptSubmit", "PreToolUse", "PostToolUse"):
-            ours = [e for e in doc["hooks"][event] if "copilot_hook.py" in e["command"]]
+            ours = [e for e in doc["hooks"][event] if "copilot_hook.py" in (e.get("bash") or e.get("command") or "")]
             self.assertEqual(len(ours), 1, event)
-            self.assertTrue(ours[0]["command"].endswith(event))
+            self.assertEqual(ours[0]["type"], "command")
+            self.assertTrue(ours[0]["bash"].endswith(event))
+            self.assertEqual(ours[0]["powershell"], "& " + ours[0]["bash"])      # PowerShell needs the call operator
             self.assertEqual(doc["hooks"][event][-1], ours[0])
         backups = list(self.hooks_path().parent.glob("hooks.json.orkestra-backup-*"))
         self.assertEqual(len(backups), 1)
@@ -1269,7 +1280,16 @@ class TestCopilotKit(helpers.Sandbox):
         labels = {label: ok for ok, label, _ in rows}
         self.assertTrue(labels.get("copilot hooks"))
 
+        root = CK.plugin_dir()
+        self.assertEqual(json.loads((root / "plugin.json").read_text())["name"], "orkestra")
+        skill = (root / "skills" / "orkestra-run" / "SKILL.md").read_text()
+        self.assertIn("name: orkestra-run", skill)
+        self.assertIn(EN.COPILOT_MARK, skill)
+        self.assertEqual(len(list((root / "skills").iterdir())), len(EN.SKILL_NAMES))
+
         CK.uninstall()
+        self.assertFalse((root / "plugin.json").exists())
+        self.assertFalse((root / "skills").exists())
         doc = json.loads(self.hooks_path().read_text())
         self.assertEqual(doc["hooks"], mine["hooks"])
         self.assertEqual(doc["extra"], {"keep": 1})

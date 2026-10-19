@@ -110,7 +110,12 @@ def launch_ready(project: Path, st: Dict[str, Any]) -> List[str]:
             try:
                 session = EN.new_session(engine, binary, str(project)) if engine == "cursor" else str(uuid.uuid4())
                 prompt = worker_prompt(fresh, tid, project.name)
-                spec = EN.headless_command(engine, binary, session, prompt, True, {"approval_mode": "autopilot"})
+                opts: Dict[str, Any] = {"approval_mode": "autopilot"}
+                if engine == "copilot":     # same profile as the main run (model, effort, context, allow-all, hooks)
+                    cfg = paths.global_config()
+                    opts.update(EN.copilot_resolve(cfg, selected=fresh.get("copilot_profile")))
+                    opts["plugin_dir"] = EN.copilot_plugin_dir(cfg)
+                spec = EN.headless_command(engine, binary, session, prompt, True, opts)
             except Exception as exc:
                 lines.append(f"parallel: {tid} not started ({exc})")
                 continue

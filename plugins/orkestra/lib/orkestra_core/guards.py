@@ -1665,8 +1665,14 @@ MCP_SHELL_RE = re.compile(r"^mcp__.+__(execute_shell_command|run_shell|shell_exe
 
 
 def normalize_event(event: Dict[str, Any]) -> Dict[str, Any]:
-    """Map MCP editing/shell tools (e.g. Serena's replace_symbol_body) onto Write/Bash semantics."""
+    """Map MCP editing/shell tools (e.g. Serena's replace_symbol_body) onto Write/Bash semantics.
+    Claude Code's PowerShell tool (Windows) carries the same `command` input as Bash and goes through the Bash guards
+    (the shell parser is POSIX-shaped: git/rm style commands are caught, PowerShell-only cmdlets are not)."""
     tool = event.get("tool_name") or ""
+    if tool == "PowerShell":
+        ev = dict(event)
+        ev["tool_name"] = "Bash"
+        return ev
     if not tool.startswith("mcp__"):
         return event
     ti = event.get("tool_input") or {}

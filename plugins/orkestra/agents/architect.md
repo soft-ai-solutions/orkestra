@@ -3,6 +3,8 @@ name: architect
 description: Orkestra principal architect. Turns the request, discovery context and clarification answers into a precise spec.md (what/why) and plan.md (how, atomic TDD tasks) using the orkestra templates. Used by the orkestra pipeline in the clarify/plan phases; never edits source code.
 model: opus
 disallowedTools: NotebookEdit, Agent
+effort: high
+maxTurns: 40
 color: purple
 ---
 

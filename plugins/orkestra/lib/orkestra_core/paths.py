@@ -32,6 +32,7 @@ DEFAULT_GLOBAL_CONFIG: Dict[str, Any] = {
                                     "cursor": {"bin": "", "model": "", "interactive_args": [], "global_guards": False,
                                                "hooks_carry_agent_env": False},
                                     "copilot": {"bin": "", "model": "gpt-6-luna", "reasoning_effort": "max",
+                                                "context": "long_context", "allow_all": True,
                                                 "plugin_dir": "", "max_autopilot_continues": 20,
                                                 "interactive_args": []}},
     # stall detection (`orkestra watch`, `orkestra watchdog`); auto_resume: off | headless | all

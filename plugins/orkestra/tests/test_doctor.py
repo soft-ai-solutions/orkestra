@@ -84,6 +84,8 @@ class TestDoctorSoftPass(helpers.Sandbox):
         self.assertEqual(cp.returncode, 0, "a stale copy is a hint, not a failure")
         self.assertRegex(cp.stdout, r"\[--\]\s+claude plugin copy .*differs from this checkout")
         self.assertIn("claude plugin update", cp.stdout)
+        self.assertIn("claude plugin marketplace update orkestra-local && claude plugin update orkestra@orkestra-local",
+                      cp.stdout.replace("\n", " "))
         # the row name and the [--] mark are stable; the detail follows the language
         tr = self.cli("doctor", check=False, env=dict(env, ORKESTRA_LANG="tr"))
         self.assertEqual(tr.returncode, 0, tr.stdout + tr.stderr)

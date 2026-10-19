@@ -32,6 +32,10 @@ BIN = PLUGIN_ROOT / "bin" / "orkestra"
 HOOK_EVENTS = {"sessionStart": 30, "beforeSubmitPrompt": 30, "preToolUse": 30, "postToolUse": 30,
                "postToolUseFailure": 30, "stop": 30, "subagentStart": 15, "sessionEnd": 15}
 MARK = "cursor_hook.py"
+# Cursor stops honouring a stop hook's followup_message after loop_limit (default 5) follow-ups per conversation;
+# orkestra caps its own nudges (hookmain), so the stop entry carries an explicit null (= no Cursor-side limit).
+# Opt-in `--fail-closed`: Cursor then blocks the call when these hooks crash or time out (default: it lets it through).
+FAIL_CLOSED = ("preToolUse", "subagentStart")
 
 
 def cursor_home() -> Path:
@@ -148,7 +152,7 @@ def _kept_python(entries: List[Any], event: str) -> Optional[str]:
     return None
 
 
-def merge_hooks(doc: Any) -> Dict[str, Any]:
+def merge_hooks(doc: Any, fail_closed: bool = False) -> Dict[str, Any]:
     """Our entries added (or refreshed) at the END of each event's list; every other entry is kept as it is."""
     _check_shape(doc)
     doc = dict(doc) if isinstance(doc, dict) else {}
@@ -157,7 +161,12 @@ def merge_hooks(doc: Any) -> Dict[str, Any]:
     for event, timeout in HOOK_EVENTS.items():
         cur = list(hooks.get(event) or [])
         rest = [e for e in cur if not _is_ours(e)]
-        hooks[event] = rest + [{"command": hook_command(event, _kept_python(cur, event)), "timeout": timeout}]
+        entry: Dict[str, Any] = {"command": hook_command(event, _kept_python(cur, event)), "timeout": timeout}
+        if event == "stop":
+            entry["loop_limit"] = None
+        if (fail_closed or any(_is_ours(e) and e.get("failClosed") for e in cur)) and event in FAIL_CLOSED:   # opt-in survives a re-install
+            entry["failClosed"] = True
+        hooks[event] = rest + [entry]
     doc["hooks"] = hooks
     return doc
 
@@ -334,7 +343,7 @@ def ensure_path_shim(*, dry: bool = False) -> List[str]:
     return actions
 
 
-def install(copy: bool = False, dry: bool = False) -> List[str]:
+def install(copy: bool = False, dry: bool = False, fail_closed: bool = False) -> List[str]:
     """Idempotent. Returns what was (or with dry=True: would be) done."""
     actions: List[str] = []
     if stale():
@@ -344,12 +353,12 @@ def install(copy: bool = False, dry: bool = False) -> List[str]:
     cur = _read_json(hp)
     if (hp.exists() or hp.is_symlink()) and not isinstance(cur, dict):       # checked before anything is changed
         raise EN.EngineError(i18n.t("cli.kit_bad_json", path=hp))
-    new = merge_hooks(cur)
+    new = merge_hooks(cur, fail_closed)
     for src, dst in _targets():
         _link(src, dst, copy, actions, dry)
     if new != cur:
         _write_hooks(hp, new, actions, dry)
-        actions.append(i18n.t("cli.kit_hooks_added", events=", ".join(HOOK_EVENTS)))
+        actions.append(i18n.t("cli.kit_hooks_added", path=hp, events=", ".join(HOOK_EVENTS)))
     actions.extend(ensure_path_shim(dry=dry))
     return actions
 
@@ -371,7 +380,7 @@ def uninstall(dry: bool = False) -> List[str]:
                     dst.unlink()
     if new is not None and new != cur:
         _write_hooks(hp, new, actions, dry)
-        actions.append(i18n.t("cli.kit_hooks_removed"))
+        actions.append(i18n.t("cli.kit_hooks_removed", path=hp))
     shim = shim_path()
     wrapper = _read_small(shim) if not shim.is_symlink() else ""       # the shell wrapper written where symlinks failed
     if (shim.is_symlink() and os.path.realpath(shim) == os.path.realpath(BIN)) or (wrapper and str(BIN) in wrapper):

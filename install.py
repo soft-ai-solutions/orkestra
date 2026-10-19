@@ -60,8 +60,8 @@ _MESSAGES = {
     "hint_git_linux": ("for example: sudo apt install git", "\u00f6rne\u011fin: sudo apt install git"),
     "git_ok": ("git ({path})", "git ({path})"),
     "engine_found": ("{name} detected", "{name} bulundu"),
-    "engine_none": ("No engine detected yet (Claude Code, Cursor or Copilot): the PATH shim is still set up.",
-                    "Hen\u00fcz motor bulunamad\u0131 (Claude Code, Cursor veya Copilot): PATH k\u0131sayolu yine de kurulur."),
+    "engine_none": ("No engine detected yet (Claude Code, Cursor, Copilot or Pi): the PATH shim is still set up.",
+                    "Hen\u00fcz motor bulunamad\u0131 (Claude Code, Cursor, Copilot veya Pi): PATH k\u0131sayolu yine de kurulur."),
     "step_tests": ("Running the plugin and bridge test suites (a few minutes; depends on system load)",
                    "Eklenti ve bridge testleri \u00e7al\u0131\u015f\u0131yor (birka\u00e7 dakika; sistem y\u00fck\u00fcne g\u00f6re de\u011fi\u015fir)"),
     "would_tests": ("would run the plugin and bridge test suites", "eklenti ve bridge testleri \u00e7al\u0131\u015ft\u0131r\u0131l\u0131rd\u0131"),
@@ -267,7 +267,7 @@ def check_git():
 
 def _shim_dir():
     """Where `orkestra` can be found after this install: the PATH shim's folder if there is a shim, else bin/."""
-    cur, _ = _kits()
+    cur = _kits()[0]
     try:
         shim = cur.shim_path() if cur else None
         if shim and (shim.exists() or shim.is_symlink() or (shim.parent / "orkestra.cmd").exists()):
@@ -310,24 +310,25 @@ def _capture(argv):
 
 
 def _kits():
-    """(cursorkit, copilotkit) from this checkout, or (None, None) when the library cannot be loaded."""
+    """(cursorkit, copilotkit, pikit) from this checkout, or (None, None, None) when the library cannot be loaded."""
     try:
         if str(PLUGIN / "lib") not in sys.path:
             sys.path.insert(0, str(PLUGIN / "lib"))
-        from orkestra_core import copilotkit, cursorkit
-        return cursorkit, copilotkit
+        from orkestra_core import copilotkit, cursorkit, pikit
+        return cursorkit, copilotkit, pikit
     except Exception as exc:
         _warn(_m("plan_unavailable", name="orkestra_core", error=str(exc)))
-        return None, None
+        return None, None, None
 
 
 def _engines():
-    """{'Claude Code': bool, 'Cursor': bool, 'Copilot': bool}, detected the way `orkestra setup` does."""
-    cur, cop = _kits()
+    """{'Claude Code': bool, 'Cursor': bool, 'Copilot': bool, 'Pi': bool}, detected the way `orkestra setup` does."""
+    cur, cop, pik = _kits()
     return {
         "Claude Code": bool(_which("claude")),
         "Cursor": bool(cur and cur.cursor_home().is_dir()),
         "Copilot": bool(cop and cop.copilot_home().is_dir()),
+        "Pi": bool(pik and pik.detected()),
     }
 
 
@@ -337,11 +338,11 @@ def _plan_install(args):
     """What an install would do. Reads only: the libraries' own dry-run modes list the file changes."""
     _plan(_m("tests_skipped") if args.skip_tests else _m("would_tests"))
     found = _engines()
-    cur, cop = _kits()
+    cur, cop, pik = _kits()
     _plan(_m("would_run", cmd=_shown([sys.executable, BIN, "setup"] + (["--yes"] if args.yes else []))))
     if found["Claude Code"]:
         _plan(_m("would_claude", name=MARKETPLACE, plugin=PLUGIN_ID))
-    for name, kit, call in (("Cursor", cur, "install"), ("Copilot", cop, "install")):
+    for name, kit, call in (("Cursor", cur, "install"), ("Copilot", cop, "install"), ("Pi", pik, "install")):
         if not (kit and found[name]):
             continue
         try:
@@ -547,7 +548,7 @@ def uninstall(args):
     anything = False
     failed = False
     anything = _remove_claude(dry) or anything
-    cur, cop = _kits()
+    cur, cop, _ = _kits()
     for name, kit in (("Cursor", cur), ("Copilot", cop)):
         if kit is None:
             continue

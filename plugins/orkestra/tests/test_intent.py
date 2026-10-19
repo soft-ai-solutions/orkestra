@@ -252,6 +252,8 @@ class TestInferSize(unittest.TestCase):
         self.assertEqual(resolve_size("L", "typo düzelt README"), "XS")
         self.assertEqual(resolve_size("S", "sub fonksiyonu ekle"), "S")
         self.assertEqual(resolve_size("XS", "sub fonksiyonu ekle"), "XS")
+        self.assertEqual(resolve_size("M", "sub fonksiyonu ekle"), "M")
+        self.assertEqual(resolve_size("L", "sub fonksiyonu ekle"), "L")
         self.assertEqual(resolve_size("auto", "küçük bugfix: null check"), "S")
         self.assertEqual(title_from_request("explain how the dashboard tracks open runs please"),
                          "explain how the dashboard tracks open")

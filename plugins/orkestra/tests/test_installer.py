@@ -150,15 +150,21 @@ class TestInstallPyDryRun(Sandbox):
     def test_every_plan_line_is_a_sentence_in_english(self):
         """`would` + the kit's noun phrase read 'would hooks.json: orkestra entries ...': the actions start with a verb."""
         install_plan = self.run_py("--dry-run", "--yes", "--skip-tests").stdout
-        self.assertIn("would update hooks.json: orkestra entries for", install_plan)
+        self.assertRegex(install_plan, r"would update \S*hooks\.json: orkestra entries for")
         self.assertEqual(self.run_py("--yes", "--skip-tests").returncode, 0)
         uninstall_plan = self.run_py("--uninstall", "--dry-run").stdout
-        self.assertIn("would update hooks.json: orkestra entries removed", uninstall_plan)
+        self.assertRegex(uninstall_plan, r"would update \S*hooks\.json: orkestra entries removed")
         for text in (install_plan, uninstall_plan):
             self.assertNotRegex(text, r"would hooks\.json")
             for line in text.splitlines():
                 if line.startswith("  - would "):
                     self.assertRegex(line, r"^  - would (run|update|remove|link|copy|write|backup|register|delete)\b", line)
+
+    def test_dry_run_plans_pi_when_a_pi_home_exists(self):
+        (self.home / ".pi" / "agent").mkdir(parents=True)
+        out = self.run_py("--dry-run", "--yes", "--skip-tests").stdout
+        self.assertIn("Pi detected", out)
+        self.assertRegex(out, r"would \w+ .*\.pi")
 
     def test_every_flag_install_sh_has_is_still_accepted(self):
         cp = self.run_py("--dry-run", "-y", "--yes", "--no-mcp", "--skip-tests")
@@ -188,7 +194,7 @@ class TestInstallPyLifecycle(Sandbox):
         self.assertIn("Orkestra install.py finished.", first.stdout)
         doc = json.loads(self.hooks_file().read_text(encoding="utf-8"))
         for event in ("SessionStart", "PreToolUse", "Stop"):
-            self.assertTrue(any("copilot_hook.py" in e["command"] for e in doc["hooks"][event]), event)
+            self.assertTrue(any("copilot_hook.py" in (e.get("bash") or e.get("command") or "") for e in doc["hooks"][event]), event)
         self.assertIn({"command": "./mine.sh"}, doc["hooks"]["Stop"])
         self.assertTrue(self.shim_files(), "the PATH shim")
         self.assertEqual(json.loads((self.oh / "config.json").read_text(encoding="utf-8"))["marker"], "keep-me")
@@ -315,7 +321,7 @@ class TestInstallPyLifecycle(Sandbox):
         # everything that could reach the developer's own machine is stubbed: this runs in-process
         with mock.patch.dict(os.environ, {"ORKESTRA_LANG": "en", "ORKESTRA_HOME": str(self.oh)}), \
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
-                mock.patch.object(mod, "_which", lambda name: None), mock.patch.object(mod, "_kits", lambda: (None, None)), \
+                mock.patch.object(mod, "_which", lambda name: None), mock.patch.object(mod, "_kits", lambda: (None, None, None)), \
                 mock.patch.object(mod, "_remove_launch_agent", lambda dry: False), \
                 mock.patch.object(mod.shutil, "rmtree", side_effect=OSError("busy")):
             rc = mod.main(["--uninstall", "--purge", "--yes"])

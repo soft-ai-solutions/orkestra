@@ -13,8 +13,8 @@ Gerekenler:
 
 - **Python 3.9 ya da üstü**, yalnız standart kütüphane. `python3 --version` ile bak (Windows: `py -3 --version`).
 - **git**.
-- **En az bir motor**: Claude Code (`claude`), Cursor CLI (`agent`) ya da GitHub Copilot (`copilot` CLI'si veya VS Code
-  ajanı). Orkestra onları sürer; yerlerine geçmez.
+- **En az bir motor**: Claude Code (`claude`), Cursor CLI (`agent`), GitHub Copilot (`copilot` CLI'si veya VS Code
+  ajanı) ya da Pi (`pi` CLI'si veya `~/.pi/agent`). Orkestra onları sürer; yerlerine geçmez.
 - **Yalnız Windows**: Claude Code hook'ları için PATH'te POSIX bir `sh`. Git for Windows bunu sağlar. macOS ve Linux'ta
   zaten vardır.
 
@@ -56,7 +56,8 @@ değiştirir) ve biri bile kırmızıysa durur. Sonra checkout'u `orkestra-local
 `orkestra@orkestra-local` eklentisini kurar, `orkestra doctor` çalıştırır, Cursor ve Copilot kurulumunu önerir, PATH
 kısayolunu ekler ve `install.sh` ile isteğe bağlı MCP sunucularını ve bridge token'ını önerir. Claude Code CLI yoksa yalnız
 Cursor ve Copilot ile devam eder ve hiçbir motor hazır değilse uyarır. Başarısız bir Claude Code adımı ya da başarısız bir
-gerekli sağlık kontrolü kurulumu 1 çıkış koduyla bitirir.
+gerekli sağlık kontrolü kurulumu 1 çıkış koduyla bitirir. `install.py --dry-run` Pi'yi de planlar; `install.sh` ve
+`install.ps1` Pi'yi `orkestra setup` ya da `orkestra pi install` komutuna bırakır.
 
 ## 4. `orkestra`'yı PATH'e koy
 
@@ -83,7 +84,7 @@ kısayolunu yazar. Kısayol PATH'e girene kadar CLI'yi yoluyla çağır: `python
 ## 5. Motorlarını etkinleştir
 
 ```bash
-orkestra setup                # Claude Code, Cursor ve Copilot'u bulur; her birini açmadan önce sorar
+orkestra setup                # Claude Code, Cursor, Copilot ve Pi'yi bulur; her birini açmadan önce sorar
 orkestra setup --yes          # bulunan her motoru soru sormadan etkinleştirir
 ```
 
@@ -113,12 +114,28 @@ bir koşuda araç çağrılarını denetler. Skill'ler ve eklenti kurulunca `ork
 sonra:
 
 1. `orkestra copilot status` çıktısının hook'ların etkin olduğunu söylediğini doğrula.
-2. Copilot host'unda (VS Code ve/veya Copilot CLI) Orkestra ajan eklentisini ve yaşam döngüsü hook'larını kendin etkinleştir;
-   böylece `SessionStart`, `UserPromptSubmit`, `PreToolUse` ve `PostToolUse` `copilot_hook.py` dosyasını çalıştırır.
+2. Eklentiyi Copilot host'unda yükle ki `SessionStart`, `UserPromptSubmit`, `PreToolUse` ve `PostToolUse` `copilot_hook.py`
+   dosyasını çalıştırsın. `orkestra run --engine copilot` bunu senin yerine yapar: Copilot CLI'yi, kurulu eklentiyi
+   (`$COPILOT_HOME/plugins/orkestra`, varsayılan `~/.copilot/plugins/orkestra`) gösteren `--plugin-dir` ile başlatır. Elle
+   açtığın bir Copilot CLI oturumunu da aynı şekilde başlat: `copilot --plugin-dir ~/.copilot/plugins/orkestra`
+   (`copilot plugin install` yalnız marketplace, GitHub ya da git kaynağı alır, yerel yol almaz). VS Code ajanında böyle
+   bir bayrak yok: eklentiyi ayarlarından kendin etkinleştir.
 3. Hook'suz bir Copilot oturumundan denetimli bir Orkestra run'ı başlatma ya da sürdürme.
 
-Gelecekte bir host kararlı bir etkinleştirme API'si sunarsa burada belgele; o zamana kadar host'ta etkinleştirmeyi elle
-yapılan bir adım say.
+**Model, efor, context, allow-all.** CLI run'ları (`orkestra run --engine copilot`, bridge, watchdog resume)
+varsayılan olarak otomatiktir: `gpt-6-luna`, efor `max`, `long_context`, allow-all. Run başına `--model`, `--effort`,
+`--context`, `--no-allow-all` (yine `--allow-all-tools` geçer, yalnız yol ve URL düşer) ile ya da
+`~/.orkestra/config.json` içindeki `engine.copilot` ile değiştir; `orkestra copilot status` sonucu ve kaynağını gösterir.
+`gpt-6-luna` yapılandırılmış varsayılandır, doğrulanmış değildir: giriş yapılan hesabın kullanabildiği modeller
+çevrimdışı denetlenemez, yoksa ilk kullanımda CLI'nın kendi hatası görünür; `--model` ya da `chat.defaultModel` bunu
+geçersiz kılar. VS Code'da efor ve context boyutu için ayar yoktur (yalnız sohbet model seçici); varsayılan model
+(`chat.defaultModel`) ve izinler (`chat.defaultConfiguration`) için vardır. VS Code 1.141'de `chat.plugins.enabled`
+varsayılan olarak **açıktır**, yani eklentinin yalnız kaydedilmesi gerekir: `orkestra copilot vscode --user` ayarları
+gösterir, `--apply` yazar (`chat.pluginLocations` makine kapsamlıdır, `--workspace` eklentiyi kaydedemez; VS Code'un
+araç onayı sormayı bırakmasını istiyorsan ayrıca `--permissions autopilot` ekle; kurumsal politika yine Manual'a
+zorlayabilir). `--remove` yalnız Orkestra'nın yazdığı değerleri geri alır.
+
+Gelecekte bir host kararlı bir etkinleştirme API'si sunarsa burada belgele.
 
 ## 6. Makineyi denetle
 
@@ -134,7 +151,7 @@ isteğe bağlı ya da bilgi amaçlıdır (MCP sunucuları, kullanmadığın bir 
 - `python3 on PATH (plugin hooks)`: bilgi amaçlı. Claude Code hook'ları `sh hooks/run_hook.sh` üzerinden başlar; bu betik
   `python3`, `python` ve `py -3` komutlarını dener. Windows'ta bu satır `not found` diyebilir, `python` ya da `py` yine de
   çalışıyor olabilir.
-- `engine ready`: Claude Code, Cursor hook'ları, Copilot hook'larından en az biri.
+- `engine ready`: Claude Code, Cursor hook'ları, Copilot hook'ları, Pi'den en az biri.
 - `language`: Orkestra'nın hangi dili ve neden kullanacağı (sonraki adım).
 
 ## 7. Dili seç

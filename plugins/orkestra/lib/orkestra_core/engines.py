@@ -237,21 +237,20 @@ def headless_command(engine: str, bin_path: str, session_id: str, prompt: str, n
             argv += ["--extension", extension]
         return {"argv": argv + [str(x) for x in (o.get("extra_args") or [])] + [text], "stdin": None}
     if engine == "copilot":
-        argv = [bin_path, "-p", "--output-format", "json", "--allow-all-tools",
+        # `-p` takes the prompt as its value: pass it as --prompt=<text> (also safe for a prompt starting with "-").
+        argv = [bin_path, "--output-format", "json", *_copilot_permission_args(o),
                 "--excluded-tools", COPILOT_EXCLUDED_TOOLS]
         if o.get("approval_mode", "autopilot") != "manual":
             argv += ["--autopilot", "--no-ask-user"]
-        if o.get("model"):
-            argv += ["--model", str(o["model"])]
-        if o.get("reasoning_effort"):
-            argv += ["--reasoning-effort", str(o["reasoning_effort"])]
+        argv += _copilot_profile_args(bin_path, o)
         if o.get("max_autopilot_continues"):
             argv += ["--max-autopilot-continues", str(o["max_autopilot_continues"])]
         plugin_dir = str(o.get("plugin_dir") or copilot_plugin_dir())
         if plugin_dir:
             argv += ["--plugin-dir", plugin_dir]
-        argv += ["--session-id" if new else "--resume", raw_session_id(session_id)]
-        return {"argv": argv + [str(x) for x in (o.get("extra_args") or [])] + [prompt], "stdin": None}
+        argv += [("--session-id=" if new else "--resume=") + raw_session_id(session_id)]
+        return {"argv": argv + [str(x) for x in (o.get("extra_args") or [])] + ["--prompt=" + (prompt or "").replace("\x00", "")],
+                "stdin": None}
     argv = [bin_path, "-p", "--output-format", "json", "--force", "--trust", "--resume", session_id]
     if o.get("model"):
         argv += ["--model", str(o["model"])]
@@ -276,13 +275,10 @@ def interactive_command(engine: str, bin_path: str, prompt: str, opts: Optional[
             return [bin_path, *extra, *flags, "--", text]
         return [bin_path, *extra, *flags, text]
     if engine == "copilot":
-        argv = [bin_path, "-i", prompt, "--allow-all-tools", "--excluded-tools", COPILOT_EXCLUDED_TOOLS]
+        argv = [bin_path, "-i", prompt, *_copilot_permission_args(o), "--excluded-tools", COPILOT_EXCLUDED_TOOLS]
         if o.get("approval_mode", "autopilot") != "manual":
             argv += ["--autopilot", "--no-ask-user"]
-        if o.get("model"):
-            argv += ["--model", str(o["model"])]
-        if o.get("reasoning_effort"):
-            argv += ["--reasoning-effort", str(o["reasoning_effort"])]
+        argv += _copilot_profile_args(bin_path, o)
         if o.get("max_autopilot_continues"):       # the same cap the headless builder passes
             argv += ["--max-autopilot-continues", str(o["max_autopilot_continues"])]
         plugin_dir = str(o.get("plugin_dir") or copilot_plugin_dir())
@@ -482,6 +478,8 @@ def copilot_hooks_active(plugin_dir: str) -> bool:
     if not plugin_dir:
         return False
     root = Path(plugin_dir).expanduser()
+    if not (root / "plugin.json").is_file():       # Copilot ignores a plugin directory without its manifest
+        return False
     candidates = (root / "com.github.copilot" / "hooks" / "hooks.json", root / "hooks" / "hooks.json")
     for path in candidates:
         try:
@@ -494,24 +492,74 @@ def copilot_hooks_active(plugin_dir: str) -> bool:
     return False
 
 
-# Copilot CLI model / effort words the user may name in the request. One clear hit wins; ambiguous → default.
+# Copilot CLI model / effort / context / allow-all: what the user may name, and the one resolver every path uses.
+# Facts (Copilot CLI 1.0.98, `copilot --help`): --reasoning-effort none|minimal|low|medium|high|xhigh|max,
+# --context default|long_context, --allow-all = --allow-all-tools --allow-all-paths --allow-all-urls.
+# Whether a given model honours max / long_context is not exposed by the CLI: the CLI's own error is surfaced.
+COPILOT_DEFAULTS = {"model": "gpt-6-luna", "reasoning_effort": "max", "context": "long_context", "allow_all": True}
+COPILOT_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+COPILOT_CONTEXTS = ("default", "long_context")
 _COPILOT_MODELS = (
-    "gpt-6-luna", "gpt-6-astra", "gpt-5.4", "gpt-5.2", "gpt-5", "gpt-4.1", "gpt-4o", "o4-mini", "o3", "o3-mini",
+    "gpt-6-luna", "gpt-6-astra", "gpt-6-sol", "gpt-6.1-sol", "gpt-5.4", "gpt-5.2", "gpt-5", "gpt-4.1", "gpt-4o",
+    "o4-mini", "o3", "o3-mini",
 )
-_COPILOT_EFFORTS = ("max", "high", "medium", "low", "minimal")
+_COPILOT_EFFORTS = COPILOT_EFFORTS
+_MODEL_FLAG_OK = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,79}$")      # free text, but never garbage for argv
 _MODEL_IN_REQUEST = re.compile(
-    r"(?i)(?:\b(?:use|with|model|modeli)\b[\s:=-]*)?(?:gpt[-\s]?6[-\s]?(?:luna|astra)|gpt[-\s]?5(?:\.\d)?|"
+    r"(?i)(?:\b(?:use|with|model|modeli)\b[\s:=-]*)?(?:gpt[-\s]?6(?:\.1)?[-\s]?(?:luna|astra|sol)|gpt[-\s]?5(?:\.\d)?|"
     r"gpt[-\s]?4(?:\.1|o)?|\bo4-mini\b|\bo3(?:-mini)?\b)")
 _EFFORT_IN_REQUEST = re.compile(
-    r"(?i)(?:reasoning[\s-]*effort|effort|reasoning)[\s:=-]*(max|high|medium|low|minimal)"
-    r"|\b(max|high|medium|low|minimal)\s+reasoning(?:\s+effort)?\b")
+    r"(?i)(?:reasoning[\s-]*effort|effort|reasoning)[\s:=-]*(max|xhigh|high|medium|low|minimal|none)\b"
+    r"|\b(max|xhigh|high|medium|low|minimal)\s+reasoning(?:\s+effort)?\b")
+# Context / allow-all words count only as an explicit directive ("use long context", "no allow all"): a task such
+# as "change the default context menu" or "allow all origins" is about the project, not about the run's profile.
+_CONTEXT_LONG = re.compile(
+    r"(?i)\b(?:use|using|with|set|enable)\s+(?:the\s+)?long[\s_-]*context\b|\blong[\s_-]*context\s+(?:mode|please|on)\b"
+    r"|\buzun\s+(?:context|ba[gğ]lam)\s+(?:kullan|ile)\b")
+_CONTEXT_DEFAULT = re.compile(
+    r"(?i)\b(?:use|using|with|set)\s+(?:the\s+)?(?:default|normal|standard)\s+context\b(?!\s+\w)"
+    r"|\b(?:default|normal|standard)\s+context\s+(?:mode|please)\b"
+    r"|\b(?:varsay[ıi]lan|normal)\s+(?:context|ba[gğ]lam)\s+(?:kullan|ile)\b")
+_ALLOW_ALL_NO = re.compile(r"(?i)\b(?:no|not|without|don'?t)[\s-]+allow[\s-]*all\b|\bhepsine\s+izin\s+verme\b")
+_ALLOW_ALL_YES = re.compile(r"(?i)\b(?:use|with|enable)\s+allow[\s-]*all\b(?!\s+\w)|\bhepsine\s+izin\s+ver\b")
 
 
 def _norm_copilot_model(token: str) -> str:
     t = re.sub(r"[\s_]+", "-", (token or "").strip().lower())
     t = t.replace("gpt6", "gpt-6").replace("gpt5", "gpt-5").replace("gpt4", "gpt-4")
-    aliases = {"gpt-6luna": "gpt-6-luna", "gpt-6astra": "gpt-6-astra", "gpt-4.1": "gpt-4.1", "gpt-4o": "gpt-4o"}
-    return aliases.get(t, t)
+    t = re.sub(r"^(gpt-6(?:\.1)?)(luna|astra|sol)$", r"\1-\2", t)
+    return t
+
+
+def pick_copilot_model(request: str) -> Optional[str]:
+    """The one supported model named in the request, or None (nothing named, or several different ones)."""
+    found: List[str] = []
+    for m in _MODEL_IN_REQUEST.finditer(request or ""):
+        name = _norm_copilot_model(re.sub(r"^(?:use|with|model|modeli)[\s:=-]*", "", _norm_copilot_model(m.group(0))))
+        if name in _COPILOT_MODELS and name not in found:
+            found.append(name)
+    return found[0] if len(found) == 1 else None
+
+
+def pick_copilot_effort(request: str) -> Optional[str]:
+    found: List[str] = []
+    for m in _EFFORT_IN_REQUEST.finditer(request or ""):
+        word = (m.group(1) or m.group(2) or "").lower()
+        if word in COPILOT_EFFORTS and word not in found:
+            found.append(word)
+    return found[0] if len(found) == 1 else None
+
+
+def pick_copilot_context(request: str) -> Optional[str]:
+    long_, default = bool(_CONTEXT_LONG.search(request or "")), bool(_CONTEXT_DEFAULT.search(request or ""))
+    return "long_context" if long_ and not default else ("default" if default and not long_ else None)
+
+
+def pick_copilot_allow_all(request: str) -> Optional[bool]:
+    text = request or ""
+    no = bool(_ALLOW_ALL_NO.search(text))
+    yes = bool(_ALLOW_ALL_YES.search(_ALLOW_ALL_NO.sub(" ", text)))
+    return False if no and not yes else (True if yes and not no else None)
 
 
 def copilot_model_for_request(request: str, default: str = "gpt-6-luna") -> str:
@@ -519,30 +567,113 @@ def copilot_model_for_request(request: str, default: str = "gpt-6-luna") -> str:
 
     A single explicit supported name wins (`use gpt-6-astra`). Several different names, or none, → default.
     """
-    text = request or ""
-    found: List[str] = []
-    for m in _MODEL_IN_REQUEST.finditer(text):
-        name = _norm_copilot_model(m.group(0))
-        name = re.sub(r"^(?:use|with|model|modeli)[\s:=-]*", "", name)
-        name = _norm_copilot_model(name)
-        if name in _COPILOT_MODELS and name not in found:
-            found.append(name)
-    if len(found) == 1:
-        return found[0]
-    return default or "gpt-6-luna"
+    return pick_copilot_model(request) or default or "gpt-6-luna"
 
 
 def copilot_effort_for_request(request: str, default: str = "max") -> str:
     """Pick one reasoning-effort word from the request, or keep the configured default."""
-    text = request or ""
-    found: List[str] = []
-    for m in _EFFORT_IN_REQUEST.finditer(text):
-        word = (m.group(1) or m.group(2) or "").lower()
-        if word in _COPILOT_EFFORTS and word not in found:
-            found.append(word)
-    if len(found) == 1:
-        return found[0]
-    return default or "max"
+    return pick_copilot_effort(request) or default or "max"
+
+
+def _as_bool(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    word = str(value).strip().lower()
+    return True if word in ("1", "true", "yes", "on", "y") else (False if word in ("0", "false", "no", "off", "n") else None)
+
+
+def _copilot_check(key: str, value: Any, origin: str) -> Any:
+    """Validate ONE profile value at the boundary (EngineError with a catalog message); returns the normal form."""
+    if key == "allow_all":
+        flag = _as_bool(value)
+        if flag is None:
+            raise EngineError(i18n.t("cli.copilot_bad_bool", key=key, value=value, origin=origin))
+        return flag
+    text = str(value).strip()
+    if key == "model":
+        if text.lower() == "auto":
+            return "auto"
+        if not _MODEL_FLAG_OK.match(text):
+            raise EngineError(i18n.t("cli.copilot_bad_model", value=text[:60], origin=origin))
+        return text
+    allowed = COPILOT_EFFORTS if key == "reasoning_effort" else COPILOT_CONTEXTS
+    if text.lower() not in allowed:
+        raise EngineError(i18n.t("cli.copilot_bad_value", key=key, value=text[:60], allowed=", ".join(allowed),
+                                 origin=origin))
+    return text.lower()
+
+
+def copilot_resolve(cfg: Optional[Mapping[str, Any]] = None, request: str = "", flags: Optional[Mapping[str, Any]] = None,
+                    selected: Optional[Mapping[str, Any]] = None, extra: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+    """The ONE place a Copilot run's model / effort / context / allow-all is decided (run, resume, watchdog, bridge).
+
+    Precedence, highest first: explicit flag, words in the request (allow-all: only "no allow all" counts), the choice already stored for this run/job
+    (`selected`), engine.copilot config (`extra` = per-key overrides on top of it, e.g. the bridge's), built-in default.
+    Returns the engine.copilot options with the four keys resolved plus `sources` ({key: where it came from}).
+    """
+    engine_cfg = (cfg or {}).get("engine")
+    section = engine_cfg.get("copilot") if isinstance(engine_cfg, Mapping) else None     # a hand-edited config may hold junk
+    opts = dict(section) if isinstance(section, Mapping) else {}
+    opts.update({k: v for k, v in (extra or {}).items() if v not in (None, "")})
+    req = {"model": pick_copilot_model(request), "reasoning_effort": pick_copilot_effort(request),
+           "context": pick_copilot_context(request),
+           "allow_all": False if pick_copilot_allow_all(request) is False else None}     # words may only LOWER privileges
+    sources: Dict[str, str] = {}
+    for key, default in COPILOT_DEFAULTS.items():
+        layers = (("flag", (flags or {}).get(key)), ("request", req[key]), ("run", (selected or {}).get(key)),
+                  ("config", opts.get(key)), ("default", default))
+        for origin, value in layers:
+            if value is None or value == "":
+                continue
+            opts[key] = _copilot_check(key, value, origin)
+            sources[key] = origin
+            break
+    opts["sources"] = sources
+    return opts
+
+
+def copilot_profile_of(opts: Mapping[str, Any]) -> Dict[str, Any]:
+    """The four resolved keys, as stored in the run state so a resume reuses what the run started with."""
+    return {k: opts.get(k) for k in COPILOT_DEFAULTS}
+
+
+def _copilot_permission_args(o: Mapping[str, Any]) -> List[str]:
+    """allow_all (default on) = what `--allow-all` documents: every tool, path and URL without a prompt, so a
+    headless turn never stalls on a question. --excluded-tools, deny rules and Orkestra's own hooks still apply."""
+    if _as_bool(o.get("allow_all", True)) is False:
+        return ["--allow-all-tools"]
+    return ["--allow-all-tools", "--allow-all-paths", "--allow-all-urls"]
+
+
+_cli_help: Dict[str, Optional[str]] = {}
+
+
+def copilot_cli_has(bin_path: str, flag: str) -> Optional[bool]:
+    """Does `copilot --help` list this flag? None = could not be checked (assume yes). Cached per binary."""
+    if bin_path not in _cli_help:
+        try:        # the CLI unpacks itself on first start: give it a throwaway home so nothing lands in the user's
+            with tempfile.TemporaryDirectory(prefix="orkestra-cphelp-") as scratch:
+                env = dict(os.environ, HOME=scratch, USERPROFILE=scratch, COPILOT_HOME=os.path.join(scratch, "c"),
+                           XDG_CONFIG_HOME=scratch, XDG_CACHE_HOME=scratch, XDG_STATE_HOME=scratch,
+                           APPDATA=scratch, LOCALAPPDATA=scratch)
+                cp = subprocess.run([bin_path, "--help"], capture_output=True, encoding="utf-8", errors="replace",
+                                    timeout=10, stdin=subprocess.DEVNULL, env=env)
+            _cli_help[bin_path] = (cp.stdout or "") + (cp.stderr or "") if cp.returncode == 0 else None
+        except Exception:
+            _cli_help[bin_path] = None
+    text = _cli_help[bin_path]
+    return None if not text else flag in text
+
+
+def _copilot_profile_args(bin_path: str, o: Mapping[str, Any]) -> List[str]:
+    argv: List[str] = []
+    if o.get("model"):
+        argv += ["--model", str(o["model"])]
+    if o.get("reasoning_effort"):
+        argv += ["--reasoning-effort", str(o["reasoning_effort"])]
+    if o.get("context") and copilot_cli_has(bin_path, "--context") is not False:    # an older CLI: omit silently
+        argv += ["--context", str(o["context"])]
+    return argv
 
 
 def driver_prompt(engine: str, session_id: str, prompt: str, cwd: str) -> Optional[str]:

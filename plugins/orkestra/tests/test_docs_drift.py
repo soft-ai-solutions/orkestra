@@ -485,9 +485,12 @@ class TestFactsComeFromTheCode(unittest.TestCase):
     def test_version_is_one_number_everywhere(self):
         manifest = json.loads(read(ROOT / ".claude-plugin" / "marketplace.json"))
         plugin = json.loads(read(helpers.PLUGIN / ".claude-plugin" / "plugin.json"))
-        self.assertEqual(manifest["metadata"]["version"], __version__)
-        self.assertEqual([p["version"] for p in manifest["plugins"]], [__version__])
-        self.assertEqual(plugin["version"], __version__)
+        # No "version" in either manifest on purpose: Claude Code then versions the plugin by git commit, so every
+        # commit reaches users. A pinned string keeps the cached copy until someone remembers to change it (the
+        # 1.6.0 cache drifted from the checkout for that reason). The release number lives in __version__ only.
+        self.assertNotIn("version", manifest["metadata"])
+        self.assertTrue(all("version" not in p for p in manifest["plugins"]))
+        self.assertNotIn("version", plugin)
         self.assertRegex(__version__, r"^\d+\.\d+\.\d+$")
         banner = re.compile(r"(?:Latest release|Son sürüm|\(version|\(sürüm|Sürüm|Version)\s+(\d+\.\d+\.\d+)")
         for doc in (README_EN, README_TR, ROOT / "ORKESTRA.md", ROOT / "ORKESTRA.tr.md"):

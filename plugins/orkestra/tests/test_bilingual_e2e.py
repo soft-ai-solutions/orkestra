@@ -711,6 +711,11 @@ class TestChoosingTheLanguage(helpers.Sandbox):
                 self.assertIn(features_header, (memory / "FEATURES.md").read_text(encoding="utf-8"))
                 for name in ("PROJECT.md", "FEATURES.md", "DECISIONS.md", "LEARNINGS.md"):
                     text = (memory / name).read_text(encoding="utf-8")
+                    if name == "PROJECT.md":    # init replaces the template with the text observed from the checkout
+                        self.assertTrue(text.startswith("# Project: " + proj.name), "%s in %s" % (name, code))
+                        self.assertIn("## Summary", text)
+                        self.assertIn("unknown", text)
+                        continue
                     template = (helpers.PLUGIN / "templates" / ("tr" if code == "tr" else "en") / "memory" / name)
                     self.assertEqual(text, template.read_text(encoding="utf-8").replace("{{project}}", proj.name),
                                      "%s in %s" % (name, code))

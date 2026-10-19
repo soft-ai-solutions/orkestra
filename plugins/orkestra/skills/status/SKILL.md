@@ -1,6 +1,6 @@
 ---
 name: status
-description: Show where Orkestra runs stand — phase, tasks, evidence, approval, gate results — for the current or a named project, without changing anything.
+description: Show where Orkestra runs stand — phase, tasks, evidence, approval, gate results — for the current or a named project, without changing anything. Use when the user asks about the progress or state of an orkestra run (status, durum, nerede kaldık, what is running, where are we).
 argument-hint: "[project]"
 ---
 Report orkestra status (read-only). Project hint: $ARGUMENTS

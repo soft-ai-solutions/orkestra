@@ -1,6 +1,5 @@
 {
   "name": "orkestra",
-  "version": "1.6.0",
   "description": "Deterministic agent orchestra for end-to-end software delivery: discovery, clarifying Q&A, spec+plan approval, TDD agent team, no-regression gates, adversarial review, delivery report and per-project memory \u2014 with hook-enforced guards (no commit/push/deploy unless asked, no secrets, no cross-project writes).",
   "author": {
     "name": "Orkestra contributors"

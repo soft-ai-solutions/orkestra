@@ -6,6 +6,36 @@ Orkestra now serves people in English and Turkish (English is the default), runs
 with Python 3.9 to 3.14, and its repository documentation is available in both languages. Entries up to 1.6.0 below
 were written in Turkish and are kept as they were.
 
+### Copilot: model, effort, context, allow-all
+- **Copilot CLI profile:** `engine.copilot` gains `context` (`long_context`) and `allow_all` (`true`) next to `model`
+  (`gpt-6-luna`) and `reasoning_effort` (`max`). allow-all passes `--allow-all-tools --allow-all-paths --allow-all-urls`
+  in the headless and interactive command; `--excluded-tools` and the hooks stay. `--context` is omitted for a CLI that
+  does not list it.
+- **One resolver:** `engines.copilot_resolve` decides flag > request words > stored run choice > config > default for
+  `orkestra run`, the watchdog resume (reads `copilot_profile` from the run state) and the bridge. New flags
+  `orkestra run --model --effort --context --allow-all/--no-allow-all`; efor levels `none` to `max`; invalid values are
+  rejected with a catalog message; the model id is free text or `auto`.
+- **Visibility:** `orkestra copilot status` and `orkestra doctor` show the effective values and their source.
+- **VS Code:** `orkestra copilot vscode` (plan by default; `--apply --workspace|--user`, `--remove`, `--permissions`,
+  `--model/--effort` agent file). Writes `chat.defaultModel` and `chat.defaultConfiguration` (both exist in VS Code
+  1.141); effort and context size have no setting. `chat.pluginLocations` is machine-scoped: not written with
+  `--workspace` (use `--user`). `--effort` without `--model` is refused; `--remove` drops a key only while it holds
+  Orkestra's value. Request words can only lower allow-all and only explicit directives change context. Parallel
+  workers use the run's profile. Unverified: agent `reasoning-effort` in Local mode; `gpt-6-luna` is a configured
+  default, whether the signed-in account has it is not verifiable offline (first use shows the CLI's own error;
+  `--model` / `chat.defaultModel` override).
+
+### Engine audit fixes
+- **Copilot:** the install and the docs now say what works: `orkestra run --engine copilot` starts the CLI with
+  `--plugin-dir`, and a manual CLI session uses `copilot --plugin-dir ~/.copilot/plugins/orkestra`
+  (`copilot plugin install` does not take a local path). Dry-run and install lines name the `hooks.json` they touch.
+- **Claude Code:** `orkestra setup` has an update path for an already installed plugin copy.
+- **Cursor:** the generated hooks carry a `loop_limit`.
+- **Intent:** a regression in intent matching was fixed and pinned by a test.
+- **Pi and the installer:** `install.py` detects and plans Pi next to Claude Code, Cursor and Copilot; the no-engine
+  messages name Pi; `orkestra doctor` prints `orkestra cursor install` / `orkestra copilot install` next to a missing
+  Cursor or Copilot row.
+
 ### Control plane and locks (wave A)
 - **Binding:** a `[orkestra:bind]` marker now carries ` home=<ORKESTRA_HOME>` and binds a chat only when the main chat
   ran `orkestra start|resume|pause|abort|phase next` itself; subagents and text echoed by `cat`/`grep` never bind. A

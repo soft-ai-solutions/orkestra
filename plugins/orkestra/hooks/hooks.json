@@ -25,7 +25,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit|Read|Grep|Glob|AskUserQuestion|Agent|Task|SendMessage|WebFetch|WebSearch|mcp__.*",
+        "matcher": "Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit|Read|Grep|Glob|AskUserQuestion|Agent|Task|SendMessage|WebFetch|WebSearch|mcp__.*",
         "hooks": [
           {
             "type": "command",
@@ -37,7 +37,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit|AskUserQuestion|Agent|Task|SendMessage|mcp__.*",
+        "matcher": "Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit|AskUserQuestion|Agent|Task|SendMessage|mcp__.*",
         "hooks": [
           {
             "type": "command",
@@ -78,7 +78,7 @@
             "timeout": 15
           }
         ],
-        "matcher": "Bash|Agent|Task"
+        "matcher": "Bash|PowerShell|Agent|Task"
       }
     ],
     "Notification": [

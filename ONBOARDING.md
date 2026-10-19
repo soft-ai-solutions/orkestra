@@ -13,8 +13,8 @@ You need:
 
 - **Python 3.9 or newer**, standard library only. Check it with `python3 --version` (Windows: `py -3 --version`).
 - **git**.
-- **At least one engine**: Claude Code (`claude`), the Cursor CLI (`agent`), or GitHub Copilot (the `copilot` CLI or the
-  VS Code agent). Orkestra drives them; it does not replace them.
+- **At least one engine**: Claude Code (`claude`), the Cursor CLI (`agent`), GitHub Copilot (the `copilot` CLI or the
+  VS Code agent) or Pi (the `pi` CLI or `~/.pi/agent`). Orkestra drives them; it does not replace them.
 - **Windows only**: a POSIX `sh` on PATH for the Claude Code hooks. Git for Windows provides it.
   macOS and Linux have it already.
 
@@ -56,7 +56,8 @@ load changes the time) and stops if anything is red. Then it registers the check
 `orkestra-local`, installs `orkestra@orkestra-local`, runs `orkestra doctor`, offers the Cursor and Copilot setup, adds
 the PATH shim and, with `install.sh`, offers the optional MCP servers and the bridge token. Without the Claude Code CLI
 it continues with Cursor and Copilot only, and warns when no engine is ready. A failed Claude Code step or a failed
-required health check ends the install with exit code 1.
+required health check ends the install with exit code 1. `install.py --dry-run` plans Pi too; `install.sh` and
+`install.ps1` leave Pi to `orkestra setup` or `orkestra pi install`.
 
 ## 4. Put `orkestra` on PATH
 
@@ -83,7 +84,7 @@ shim. Until the shim is on PATH, call the CLI by path: `python3 plugins/orkestra
 ## 5. Enable your engines
 
 ```bash
-orkestra setup                # detects Claude Code, Cursor and Copilot; asks before enabling each
+orkestra setup                # detects Claude Code, Cursor, Copilot and Pi; asks before enabling each
 orkestra setup --yes          # enables every detected engine without questions
 ```
 
@@ -112,11 +113,28 @@ and the extension are installed.
 to flip the host's own toggles (the VS Code GitHub Copilot agent plugin, session hooks, the model picker). After install:
 
 1. Confirm `orkestra copilot status` reports hooks active.
-2. In the Copilot host (VS Code and/or the Copilot CLI), enable the Orkestra agent plugin and its lifecycle hooks
-   yourself, so that `SessionStart`, `UserPromptSubmit`, `PreToolUse` and `PostToolUse` run `copilot_hook.py`.
+2. Load the plugin in the Copilot host so that `SessionStart`, `UserPromptSubmit`, `PreToolUse` and `PostToolUse` run
+   `copilot_hook.py`. `orkestra run --engine copilot` does this for you: it starts the Copilot CLI with `--plugin-dir`
+   pointing at the installed plugin (`$COPILOT_HOME/plugins/orkestra`, default `~/.copilot/plugins/orkestra`). For a
+   manual Copilot CLI session start it the same way: `copilot --plugin-dir ~/.copilot/plugins/orkestra`
+   (`copilot plugin install` takes marketplace, GitHub or git sources only, not a local path). The VS Code agent has no
+   such flag: enable the plugin in its settings yourself.
 3. Do not start or resume a guarded Orkestra run from an unhooked Copilot session.
 
-If a future host exposes a stable enable API, document it here; until then treat host enable as a manual step.
+**Model, effort, context, allow-all.** CLI runs (`orkestra run --engine copilot`, the bridge, the watchdog resume) are
+automatic by default: `gpt-6-luna`, effort `max`, `long_context`, allow-all. Override per run with `--model`,
+`--effort`, `--context`, `--no-allow-all` (it still passes `--allow-all-tools`, only paths and URLs are dropped), or in
+`engine.copilot` of `~/.orkestra/config.json`; `orkestra copilot status` shows the result and its source. `gpt-6-luna` is
+the configured default, not a verified one: the models your signed-in account can use cannot be checked offline, the
+first use shows the CLI's own error if it is missing, and `--model` or `chat.defaultModel` override it. In VS Code,
+effort and context size have no setting (chat model picker only); the default model (`chat.defaultModel`) and
+permissions (`chat.defaultConfiguration`) do. `chat.plugins.enabled` is **true by default** in VS Code 1.141, so the
+plugin only needs registering: `orkestra copilot vscode --user` shows the settings, and `--apply` writes them
+(`chat.pluginLocations` is machine-scoped, so `--workspace` cannot register the plugin; add `--permissions autopilot`
+only if you want VS Code to stop asking for tool approval; enterprise policy may still force Manual). `--remove` undoes
+only the values Orkestra wrote.
+
+If a future host exposes a stable enable API, document it here.
 
 ## 6. Check the machine
 
@@ -131,7 +149,7 @@ lines are optional or informational (MCP servers, an engine you do not use). The
   active, so do not start runs until it is fixed.
 - `python3 on PATH (plugin hooks)`: informational. The Claude Code hooks start through `sh hooks/run_hook.sh`, which
   tries `python3`, `python` and `py -3`; on Windows this row may say `not found` while `python` or `py` still works.
-- `engine ready`: at least one of Claude Code, Cursor hooks, Copilot hooks.
+- `engine ready`: at least one of Claude Code, Cursor hooks, Copilot hooks, Pi.
 - `language`: which language Orkestra will use and why (next step).
 
 ## 7. Pick a language

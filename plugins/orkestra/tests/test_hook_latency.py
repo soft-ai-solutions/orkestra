@@ -184,7 +184,7 @@ class TestQuietEvents(Sandbox):
         for tool in ("Agent", "Task", "SendMessage", "AskUserQuestion", "WebFetch", "WebSearch", "Glob", "TodoWrite"):
             out.append(("PreToolUse", self.event("PreToolUse", tool_name=tool, tool_input={"x": 1}), True))
         # never skipped: every tool some global guard looks at, and a Bash output that may carry a bind marker
-        for tool in ("Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "Read", "Grep", "mcp__serena__execute_shell_command",
+        for tool in ("Bash", "PowerShell", "Edit", "Write", "MultiEdit", "NotebookEdit", "Read", "Grep", "mcp__serena__execute_shell_command",
                      "mcp__github__push_files"):
             out.append(("PreToolUse", self.event("PreToolUse", tool_name=tool, tool_input={"command": "ls", "file_path": p}),
                         False))

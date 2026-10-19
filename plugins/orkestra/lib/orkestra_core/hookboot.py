@@ -19,7 +19,7 @@ import sys
 from typing import Any, Dict, Optional
 
 # PreToolUse tools some global guard (secrets, home, git, store, ...) looks at without any run: never skipped.
-GUARDED_PRE_TOOLS = frozenset(("Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "Read", "Grep"))
+GUARDED_PRE_TOOLS = frozenset(("Bash", "PowerShell", "Edit", "Write", "MultiEdit", "NotebookEdit", "Read", "Grep"))
 # Events whose handler does nothing at all for a session that has no binding file (binding_for / session_binding /
 # heal_binding all find nothing). PostToolUse of a Bash call is the exception handled in is_quiet: its output may
 # carry a bind marker, which binds a session that has no binding yet.
@@ -54,7 +54,7 @@ def is_quiet(name: str, ev: Any, raw: str) -> bool:
         return False
     if name == "PreToolUse" and (tool in GUARDED_PRE_TOOLS or tool.startswith("mcp__")):
         return False
-    if name == "PostToolUse" and tool == "Bash" and "orkestra:" in raw:
+    if name == "PostToolUse" and tool in ("Bash", "PowerShell") and "orkestra:" in raw:
         return False                                    # a `[orkestra:bind]` line may be in the output
     if sid:
         from . import paths, state

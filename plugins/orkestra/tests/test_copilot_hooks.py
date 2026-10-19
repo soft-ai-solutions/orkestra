@@ -39,7 +39,22 @@ class TestCopilotHookAdapter(FlowBase):
                            tool_input={"file_path": str(self.proj / "calc.py")})
         self.assertEqual(out.get("permissionDecision"), "deny")
         self.assertIn("[orkestra:", out.get("permissionDecisionReason", ""))
-        self.assertNotIn("hookSpecificOutput", out)
+        # VS Code reads the nested shape, the CLI the flat one: both are present
+        specific = out.get("hookSpecificOutput") or {}
+        self.assertEqual(specific.get("hookEventName"), "PreToolUse")
+        self.assertEqual(specific.get("permissionDecision"), "deny")
+        self.assertEqual(specific.get("permissionDecisionReason"), out["permissionDecisionReason"])
+
+    def test_copilot_runtime_tool_names_map_to_claude_names(self):
+        for runtime, claude in (("rg", "Grep"), ("web_fetch", "WebFetch"), ("web_search", "WebSearch"),
+                                ("update_todo", "TodoWrite")):
+            self.assertEqual(copilot_hook.TOOL_NAMES[runtime], claude)
+
+    def test_user_prompt_submit_gets_no_one_chat_reminder_but_session_start_does(self):
+        self.assertEqual(copilot_hook._mention_one_chat("UserPromptSubmit", {}), {})
+        out = copilot_hook._mention_one_chat("SessionStart", {})
+        self.assertIn("this chat", out["additionalContext"])
+        self.assertEqual(out["hookSpecificOutput"]["hookEventName"], "SessionStart")
 
     def test_a_closed_deadline_answer_of_an_earlier_run_does_not_silence_this_one(self):
         # in-process callers (this adapter) never pass through dispatch.main(), which is what re-opens the answer
@@ -145,8 +160,9 @@ class TestCopilotHookAdapter(FlowBase):
             "hook_event_name": "subagentStart", "sessionId": child_id,
             "cwd": str(self.proj), "agentName": "Orkestra Scout",
         })
-        self.assertEqual(out.get("permissionDecision"), "deny")
-        self.assertIn("this chat", out.get("permissionDecisionReason", ""))
+        # subagentStart can only add context (a deny is ignored by Copilot); the `task` PreToolUse deny below is the gate
+        self.assertNotIn("permissionDecision", out)
+        self.assertIn("this chat", out.get("additionalContext", ""))
         self.assertIsNone(ST.child_binding(child_id))
         task = copilot_hook.handle_event("PreToolUse", {
             "hook_event_name": "PreToolUse", "session_id": self.sid, "cwd": str(self.proj),

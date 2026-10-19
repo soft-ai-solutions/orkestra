@@ -77,13 +77,13 @@ What makes the result depend less on how strong the model is:
 
 ## Quickstart
 
-You need Python 3.9 or newer, git, and at least one of Claude Code, the Cursor CLI (`agent`) or the Copilot CLI
-(`copilot`). Nothing to `pip install`.
+You need Python 3.9 or newer, git, and at least one of Claude Code, the Cursor CLI (`agent`), the Copilot CLI
+(`copilot`) or Pi (`pi`). Nothing to `pip install`.
 
 ```bash
 git clone https://github.com/soft-ai-solutions/orkestra.git
 cd orkestra
-python3 plugins/orkestra/bin/orkestra setup      # detects Claude Code, Cursor and Copilot and asks before enabling each (--yes: no questions)
+python3 plugins/orkestra/bin/orkestra setup      # detects Claude Code, Cursor, Copilot and Pi and asks before enabling each (--yes: no questions)
 python3 plugins/orkestra/bin/orkestra doctor     # exit 0 when the required checks pass and at least one engine is ready
 ```
 
@@ -145,10 +145,29 @@ engine in the run state, and the engine that started a run is the one that resum
   exactly those. Only chats that carry an Orkestra run are guarded; set `engine.cursor.global_guards` to apply the
   every-session guards to all Cursor chats.
 - **Pi**: `orkestra pi install` writes the Orkestra skills under `~/.pi/agent/skills` and the tool extension under `~/.pi/agent/extensions`. `orkestra pi status` and `orkestra pi uninstall` match the Cursor install surface. The extension sends each tool call through the same decision Claude and Cursor use, and a bound run continues to the next step when the turn would otherwise stop. In chat the command is `/skill:orkestra-run`. From a terminal, `orkestra run --engine pi` refuses until the skills and the extension are installed, then starts Pi with that short command instead of pasting the whole playbook.
-- **GitHub Copilot** (CLI and VS Code): `orkestra copilot install` writes the hook entries; you still enable the
-  Orkestra agent plugin and its lifecycle hooks in the host yourself. An unhooked Copilot session must not start a
-  guarded run. Copilot CLI launches default to `gpt-6-luna` with maximum reasoning effort; a supported model or effort
-  named in the request overrides that. VS Code agents inherit the model you picked in the chat.
+- **GitHub Copilot** (CLI and VS Code): `orkestra copilot install` writes the hook entries.
+  `orkestra run --engine copilot` starts the CLI with `--plugin-dir`; for a manual CLI session use
+  `copilot --plugin-dir ~/.copilot/plugins/orkestra`, and in VS Code enable the plugin yourself. An unhooked Copilot session must not start a
+  guarded run. Copilot CLI launches default to model `gpt-6-luna`, reasoning effort `max`, `long_context` and allow-all
+  (`--allow-all-tools --allow-all-paths --allow-all-urls`, with Orkestra's guards and `--excluded-tools` still in force; `--no-allow-all` drops only `--allow-all-paths` and `--allow-all-urls`, `--allow-all-tools` is still passed, so every tool still runs unasked),
+  fully automatic (`--autopilot --no-ask-user`). Choose anything else per run with
+  `orkestra run --engine copilot --model <id> --effort none|minimal|low|medium|high|xhigh|max --context default|long_context [--no-allow-all]`,
+  by words in the request (`use gpt-6-sol`, `effort high`, `use long context`, `use default context`, `no allow all`; request words can only lower allow-all, never raise it, and only explicit directives count), or permanently under
+  `engine.copilot` in `~/.orkestra/config.json`. Order: flag, request, the choice stored with the run (a resume and the
+  watchdog reuse it), config, default. `orkestra copilot status` and `orkestra doctor` show the effective values and
+  where each came from. The model id is passed through as written (the CLI says if the account lacks it); whether a
+  model honours `max` or `long_context` is not exposed by the CLI and is not checked. `gpt-6-luna` is the configured default, not a verified one: which models the signed-in account can use cannot be checked offline, the first use shows the CLI's own error if it is missing, and `--model` or `chat.defaultModel` override it. An older CLI without `--context`
+  gets no context flag (`doctor` shows a `[--]` row).
+  VS Code (checked in 1.141) has no setting for reasoning effort or context size: those stay a chat model picker choice.
+  The default model (`chat.defaultModel`) and permissions (`chat.defaultConfiguration`, `chat.permissions.default`) are
+  real settings. `orkestra copilot vscode` prints (and with `--apply --workspace PATH` or `--user` writes, with a
+  timestamped backup, idempotently, refusing files with comments) `chat.defaultModel` (the effective model),
+  `chat.defaultConfiguration` (`autopilot` + `allowAll`, only while allow-all is on), `chat.plugins.enabled`,
+  `chat.pluginLocations` and, only with `--permissions autoApprove|autopilot`, `chat.permissions.default`.
+  `chat.pluginLocations` is machine-scoped: a workspace file is ignored for it, so with `--workspace` it is not written
+  (the command says so); register the plugin with `--user`. With `--model` and `--workspace` it also writes
+  `<project>/.github/agents/orkestra.agent.md` pinned to that model and `--effort` (`--effort` needs `--model`).
+  `--remove` takes back each key only while it still holds the value Orkestra wrote.
 
 | Platform | Support |
 | --- | --- |
@@ -394,6 +413,7 @@ live in `<project>/.orkestra/config.json`. The keys you are most likely to touch
 | `lang` | `auto` | Language of human-facing text: `auto`, `en` or `tr`. |
 | `guards.<name>` | `true` | Switch one of the nine guards off. `guards.test_syntax` is opt-in and off. |
 | `engine.default` | `claude` | The engine for runs started without an explicit choice (`claude`, `cursor`, `copilot`). |
+| `engine.copilot.model` / `.reasoning_effort` / `.context` / `.allow_all` | `gpt-6-luna` / `max` / `long_context` / `true` | Copilot CLI defaults for every run (model is free text or `auto`; effort `none` to `max`; context `default` or `long_context`). |
 | `watchdog.auto_resume` | `headless` | `off`, `headless` or `all`; `max_auto_resumes` is 3. |
 | `tempo.task_review_required` | `true` | On M and L runs `task done` needs a PASS review of that round. |
 | `tempo.max_dispatches` | `3` | The same agent launched this often for the same task without new evidence makes `orkestra next` answer `escalate`. |

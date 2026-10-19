@@ -352,7 +352,7 @@ class TestSkillsAndAgents(unittest.TestCase):
     # AskUserQuestion wording, protocol section names the model must write when the conversation is Turkish, and
     # one input example. Anything else with a Turkish letter is Turkish instruction text that slipped back in.
     ALLOWED_TURKISH = (
-        "kaldığın yerden",
+        "kaldığın yerden", "projeyi tanı", "nerede kaldık",
         "Plan ve spec'i onaylıyor musun?", "Plan onayı", "plan onayı", "Onayla — uygulamaya başla", "Değişiklik istiyorum",
         "İptal et", "bu planı onaylıyorum yap …", "onaylıyorum", "Onaylamak için \"onay\" yaz; değişiklik için ne değişsin yaz.",
         "Geri alma", "Uygula (yalnız orkestra değişiklikleri)", "Diğer farklar dahil uygula (--all)", "Vazgeç",

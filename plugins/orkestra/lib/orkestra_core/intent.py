@@ -527,7 +527,8 @@ def resolve_size(requested: str, request: str) -> str:
     if not requested or requested == "auto":
         return inferred
     chosen = clamp_size(requested, request)
-    if _RANK[inferred] <= _RANK["S"] and _RANK[chosen] > _RANK[inferred] and size_floor(request) == "XS":
+    # Only a request inferred XS (a typo or a question) is protected from growth; a short feature may be sized up.
+    if inferred == "XS" and _RANK[chosen] > _RANK[inferred] and size_floor(request) == "XS":
         return inferred
     return chosen
 

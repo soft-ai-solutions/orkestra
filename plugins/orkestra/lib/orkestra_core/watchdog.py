@@ -322,7 +322,10 @@ def _spawn_resume(v: Dict[str, Any], cfg: Dict[str, Any], session: str, attempt:
         run_state = ST.load_state(project, v["run_id"])
         if run_state.get("approval_mode", "autopilot") == "manual" and run_state.get("phase") in ("clarify", "approve"):
             return "manual decision mode needs the user's approval"
-        copilot_cfg = dict(((cfg.get("engine") or {}).get("copilot") or {}))
+        try:        # the run's own stored choice wins over config, so a resume cannot silently differ from the start
+            copilot_cfg = EN.copilot_resolve(cfg, selected=run_state.get("copilot_profile"))
+        except EN.EngineError as exc:
+            return str(exc)
         copilot_cfg["plugin_dir"] = plugin_dir
         copilot_cfg["approval_mode"] = run_state.get("approval_mode", "autopilot")
         spec = EN.headless_command("copilot", binary, session, EN.resume_prompt("copilot", project.name), False,

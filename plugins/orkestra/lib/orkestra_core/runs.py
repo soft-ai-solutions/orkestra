@@ -490,7 +490,8 @@ def write_timing(project: Path, st: Dict[str, Any]) -> None:
     """The clocks of a finished run, in the feature folder. The run is already done; the caller ignores a failure.
     A phase gets a token mark only when a bound session's transcript dated a reply inside that phase."""
     tm = T.timings(st)
-    measured = usage_snapshot(project, st) or {}
+    # phase_next already stored the snapshot in st: reuse it instead of scanning the transcripts twice
+    measured = st.get("usage") if isinstance(st.get("usage"), dict) else (usage_snapshot(project, st) or {})
     counted = measured.get("phases") if isinstance(measured.get("phases"), dict) else {}
     total_tokens = measured.get("total") if "total" in measured else None
     lines = ["# Timing", "", "- " + i18n.t(

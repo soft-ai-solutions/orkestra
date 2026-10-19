@@ -151,7 +151,8 @@ class TestSetupWizard(helpers.Sandbox):
         self.assertEqual(code, 0, out)
         self.assertIn("Claude marketplace/plugin done", out)
         self.assertEqual(self.claude_calls(), ["plugin marketplace add %s" % CLI.PLUGIN_ROOT.parent.parent,
-                                               "plugin install orkestra@orkestra-local -s user"])
+                                               "plugin install orkestra@orkestra-local -s user",
+                                               "plugin update orkestra@orkestra-local"])
 
     @unittest.skipIf(os.name == "nt", "#!/bin/sh claude stub")
     def test_a_marketplace_registered_from_another_checkout_is_registered_again_for_this_one(self):
@@ -161,12 +162,15 @@ class TestSetupWizard(helpers.Sandbox):
         self.assertEqual(code, 0, out)
         self.assertEqual(self.claude_calls(), ["plugin marketplace remove orkestra-local",
                                                "plugin marketplace add %s" % root,
-                                               "plugin install orkestra@orkestra-local -s user"])
+                                               "plugin install orkestra@orkestra-local -s user",
+                                               "plugin update orkestra@orkestra-local"])
+        self.assertIn("Restart Claude Code", out)
         self.fake_claude(listing="orkestra-local\n  Source: Directory (%s)" % root)       # this checkout: just refreshed
         code, out = self.run_setup()
         self.assertEqual(code, 0, out)
         self.assertEqual(self.claude_calls(), ["plugin marketplace update orkestra-local",
-                                               "plugin install orkestra@orkestra-local -s user"])
+                                               "plugin install orkestra@orkestra-local -s user",
+                                               "plugin update orkestra@orkestra-local"])
 
     def test_a_yes_is_a_whole_word_not_a_first_letter(self):
         """`exit`, `error`, `yeah` (English) and `yok`, `yapma` (Turkish: none, don't) must not install anything."""

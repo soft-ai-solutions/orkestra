@@ -6,8 +6,10 @@ import os
 import signal
 import sys
 import time
+from unittest import mock
 
 import helpers
+from orkestra_core import engines as EN
 from orkestra_core.parallel_workers import launch_ready, worker_prompt
 from orkestra_core.runs import start_run
 from orkestra_core.state import load_state, save_state
@@ -101,3 +103,29 @@ class TestParallelWorkers(helpers.Sandbox):
         prose = worker_prompt({"work_kind": "writing", "tasks": {"T002": {"files": []}}}, "T002", "demo")
         self.assertIn("content check", prose)
         self.assertNotIn("failing test first", prose)
+
+    def test_copilot_workers_get_the_runs_profile(self) -> None:
+        (self.bin / "copilot").write_text((self.bin / "claude").read_text(encoding="utf-8"), encoding="utf-8")
+        (self.bin / "copilot").chmod(0o755)
+        tasks = {
+            "T001": {"status": "pending", "files": ["a.py"], "title": "a", "tdd": "required", "depends": []},
+            "T002": {"status": "pending", "files": ["b.py"], "title": "b", "tdd": "required", "depends": []},
+        }
+        project, st = self._run(tasks)
+        st["engine"] = "copilot"
+        st["copilot_profile"] = {"model": "gpt-6-sol", "reasoning_effort": "high", "context": "default",
+                                 "allow_all": False}
+        save_state(project, st)
+        with mock.patch.object(EN, "copilot_cli_has", return_value=True):
+            lines = launch_ready(project, load_state(project, st["run_id"]))
+        self.assertEqual(len(lines), 1, lines)
+        for _ in range(40):
+            if self.log.is_file():
+                break
+            time.sleep(0.05)
+        argv = json.loads(self.log.read_text(encoding="utf-8").splitlines()[0])["argv"]
+        self.assertEqual(argv[argv.index("--model") + 1], "gpt-6-sol")
+        self.assertEqual(argv[argv.index("--reasoning-effort") + 1], "high")
+        self.assertEqual(argv[argv.index("--context") + 1], "default")
+        self.assertIn("--allow-all-tools", argv)
+        self.assertNotIn("--allow-all-paths", argv)

@@ -262,5 +262,30 @@ class TestDialogGuard(unittest.TestCase):
         self.assertFalse(decide(bash("security show-keychain-info x"), binding(), off).denied)
 
 
+class TestPowerShellTool(unittest.TestCase):
+    """Claude Code's PowerShell tool (Windows) is a shell: it must meet the same guards as Bash."""
+
+    def test_normalize_event_maps_powershell_to_bash(self):
+        ev = {"tool_name": "PowerShell", "tool_input": {"command": "git status"}, "cwd": "/w/proj"}
+        out = guards.normalize_event(ev)
+        self.assertEqual(out["tool_name"], "Bash")
+        self.assertEqual(out["tool_input"], {"command": "git status"})
+        self.assertEqual(ev["tool_name"], "PowerShell")                # the caller's event is not mutated
+
+    def test_a_git_commit_through_powershell_is_denied_like_bash(self):
+        bash_ev = bash("git commit -m x")
+        ps_ev = dict(bash_ev, tool_name="PowerShell")
+        self.assertTrue(decide(bash_ev).denied)
+        d = decide(ps_ev)
+        self.assertTrue(d.denied)
+        self.assertEqual(d.guard, decide(bash_ev).guard)
+
+    def test_the_plugin_matchers_name_powershell(self):
+        import json
+        doc = json.loads((Path(guards.__file__).resolve().parents[2] / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+        for event in ("PreToolUse", "PostToolUse", "PostToolUseFailure"):
+            self.assertIn("PowerShell", doc["hooks"][event][0]["matcher"].split("|"), event)
+
+
 if __name__ == "__main__":
     unittest.main()

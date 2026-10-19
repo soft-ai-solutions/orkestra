@@ -4,15 +4,13 @@
     "name": "Orkestra contributors"
   },
   "metadata": {
-    "description": "Marketplace for the Orkestra plugin (installed from a local checkout)",
-    "version": "1.6.0"
+    "description": "Marketplace for the Orkestra plugin (installed from a local checkout)"
   },
   "plugins": [
     {
       "name": "orkestra",
       "source": "./plugins/orkestra",
-      "description": "End-to-end SDLC agent orchestra with deterministic guards and per-project memory",
-      "version": "1.6.0"
+      "description": "End-to-end SDLC agent orchestra with deterministic guards and per-project memory"
     }
   ]
 }

@@ -1334,6 +1334,8 @@ def main(raw: Optional[str] = None) -> int:
             # "preToolUse" …). Those are handled by hooks/cursor_hook.py; answering here too would do everything twice
             # and with the wrong vocabulary.
             return 0
+        if isinstance(ev, dict) and ev.get("tool_name") == "PowerShell":
+            ev = guards.normalize_event(ev)         # the PowerShell tool is a shell: every handler sees a Bash call
         if not name:
             name = ev.get("hook_event_name", "")
         handler = HANDLERS.get(name)

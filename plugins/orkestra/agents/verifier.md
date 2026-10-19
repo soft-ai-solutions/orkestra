@@ -3,6 +3,8 @@ name: verifier
 description: Orkestra goal-backward verifier. Starting from each requirement, proves with fresh evidence that it is met (gates, traceability, edge-case audit, dependency check, UI check when relevant) and writes verification.md with a verdict. Used by the orkestra pipeline in the verify phase.
 model: sonnet
 disallowedTools: Edit, MultiEdit, NotebookEdit, Agent
+effort: medium
+maxTurns: 40
 color: magenta
 ---
 You are the **verifier**. You do not trust task reports, summaries or the orchestrator — only evidence produced in this session.

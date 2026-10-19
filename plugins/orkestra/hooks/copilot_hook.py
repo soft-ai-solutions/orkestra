@@ -46,8 +46,14 @@ TOOL_NAMES = {
     "str_replace_editor": "Edit",
     "apply_patch": "Edit",
     "grep": "Grep",
+    "rg": "Grep",
     "glob": "Glob",
+    "web_fetch": "WebFetch",
+    "web_search": "WebSearch",
+    "update_todo": "TodoWrite",
     "task": "Agent",
+    "runsubagent": "Agent",
+    "run_subagent": "Agent",
     "ask_user": "AskUserQuestion",
 }
 AGENT_ROLES = ("scout", "researcher", "architect", "plan-critic", "implementer", "reviewer", "adversary", "verifier")
@@ -152,8 +158,8 @@ def _start_subagent(event: Dict[str, Any]) -> Dict[str, Any]:
         return {}
     if not ST.project_active_run(project):
         return {}
-    # An open run stays in the one chat that started it. A new chat is not a worker.
-    return {"permissionDecision": "deny", "permissionDecisionReason": ONE_CHAT}
+    # subagentStart can only add context (a deny is ignored); the PreToolUse deny on `task` is the real gate.
+    return {"additionalContext": ONE_CHAT}
 
 
 def _finish_subagent(event: Dict[str, Any]) -> None:
@@ -311,25 +317,38 @@ def _copilot_output(event_name: str, output: Dict[str, Any]) -> Dict[str, Any]:
         context = None
         decision = None
         reason = None
+    # Each result carries the flat Copilot CLI shape and the nested `hookSpecificOutput` shape VS Code reads.
     if event_name == "PreToolUse" and decision:
-        return {"permissionDecision": decision, "permissionDecisionReason": reason or "Orkestra policy denied this tool call."}
+        return deny_output(reason or "Orkestra policy denied this tool call.", decision)
     if context and event_name in ("SessionStart", "UserPromptSubmit", "PostToolUse", "PostToolUseFailure"):
-        return {"additionalContext": context}
+        return context_output(event_name, context)
     if event_name in ("Stop", "SubagentStop"):
-        return {key: output[key] for key in ("decision", "reason") if key in output}
+        flat = {key: output[key] for key in ("decision", "reason") if key in output}
+        if flat:
+            flat["hookSpecificOutput"] = dict(flat, hookEventName=event_name)
+        return flat
     return {}
 
 
+def deny_output(reason: str, decision: str = "deny") -> Dict[str, Any]:
+    return {"permissionDecision": decision, "permissionDecisionReason": reason,
+            "hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": decision,
+                                   "permissionDecisionReason": reason}}
+
+
+def context_output(event_name: str, context: str) -> Dict[str, Any]:
+    name = "PostToolUse" if event_name == "PostToolUseFailure" else event_name
+    return {"additionalContext": context, "hookSpecificOutput": {"hookEventName": name, "additionalContext": context}}
+
+
 def _mention_one_chat(event_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Session and prompt events remind the model to stay in this chat. Other events are unchanged."""
-    if event_name not in ("SessionStart", "UserPromptSubmit"):
+    """SessionStart reminds the model to stay in this chat. Copilot drops UserPromptSubmit output, so no reminder there."""
+    if event_name != "SessionStart":
         return payload
-    out = dict(payload)
-    prev = str(out.get("additionalContext") or "")
+    prev = str(payload.get("additionalContext") or "")
     if ONE_CHAT in prev:
-        return out
-    out["additionalContext"] = (prev + "\n" + ONE_CHAT).strip() if prev else ONE_CHAT
-    return out
+        return dict(payload)
+    return context_output(event_name, (prev + "\n" + ONE_CHAT).strip() if prev else ONE_CHAT)
 
 
 def handle_event(event_name: str, event: Dict[str, Any]) -> Dict[str, Any]:
@@ -350,17 +369,16 @@ def handle_event(event_name: str, event: Dict[str, Any]) -> Dict[str, Any]:
         if event_name == "PreToolUse" and normalized.get("tool_name") in ("Agent", "Task"):
             root = paths.find_project_root(str(normalized.get("cwd") or os.getcwd()))
             if root and ST.project_active_run(root):
-                return {"permissionDecision": "deny", "permissionDecisionReason": ONE_CHAT}
+                return deny_output(ONE_CHAT)
         if event_name == "PreToolUse" and normalized.get("agent_type") and not ST.session_binding(normalized["session_id"]):
-            return {"permissionDecision": "deny", "permissionDecisionReason":
-                    "[orkestra:roles] Copilot subagent has no active run binding; tool call blocked."}
+            return deny_output("[orkestra:roles] Copilot subagent has no active run binding; tool call blocked.")
         captured = io.StringIO()
         dispatch._ANSWER.update(closed=False, emitted=False)   # this path skips dispatch.main(), which re-opens the answer
         with contextlib.redirect_stdout(captured):
             dispatch.run_with_hook_deadline(lambda: handler(normalized))
         raw = captured.getvalue().strip()
         if not raw:
-            base = {"additionalContext": resume_context} if resume_context else {}
+            base = context_output(event_name, resume_context) if resume_context else {}
             return _mention_one_chat(event_name, base)
         raw_output = json.loads(raw)
         if not isinstance(raw_output, dict):
@@ -368,9 +386,9 @@ def handle_event(event_name: str, event: Dict[str, Any]) -> Dict[str, Any]:
         output = raw_output
         translated = _copilot_output(event_name, output)
         if resume_context:
-            translated["additionalContext"] = "\n\n".join(
+            translated.update(context_output(event_name, "\n\n".join(
                 value for value in (resume_context, translated.get("additionalContext")) if value
-            )
+            )))
         if event_name == "SubagentStop" and translated.get("decision") == "block":
             finish_subagent = False
         return _mention_one_chat(event_name, translated)
@@ -378,13 +396,13 @@ def handle_event(event_name: str, event: Dict[str, Any]) -> Dict[str, Any]:
         dispatch.log("DEADLINE (" + exc.kind + ") in Copilot " + event_name)
         if event_name == "PreToolUse":     # a hook that times out lets the call through unchecked: refuse it
             d = dispatch.deadline_denial(exc)
-            return {"permissionDecision": "deny", "permissionDecisionReason": "[orkestra:" + d.guard + "] " + d.reason}
+            return deny_output("[orkestra:" + d.guard + "] " + d.reason)
         return {}
     except Exception as exc:
         import traceback                    # only an error needs it (importing it costs 9 ms)
         dispatch.log("ERROR in Copilot " + event_name + ": " + str(exc) + "\n" + traceback.format_exc())
         if event_name == "PreToolUse":
-            return {"permissionDecision": "deny", "permissionDecisionReason": "[orkestra:complex] Orkestra hook failure; tool call blocked."}
+            return deny_output("[orkestra:complex] Orkestra hook failure; tool call blocked.")
         return {}
     finally:
         if finish_subagent:
@@ -406,8 +424,7 @@ def main() -> int:
     except Exception as exc:
         dispatch.log("ERROR parsing Copilot hook " + event_name + ": " + str(exc))
         if event_name == "PreToolUse":
-            sys.stdout.write(json.dumps({"permissionDecision": "deny",
-                                         "permissionDecisionReason": "[orkestra:complex] Invalid hook payload; tool call blocked."}))
+            sys.stdout.write(json.dumps(deny_output("[orkestra:complex] Invalid hook payload; tool call blocked.")))
     return 0
 
 

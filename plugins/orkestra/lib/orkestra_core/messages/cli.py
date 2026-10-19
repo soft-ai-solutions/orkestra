@@ -50,7 +50,7 @@ EN: Dict[str, str] = {
                                   "order mark) and try again."),
     "cli.request_file_empty": "the request file {path} is empty (the request must say what to do)",
     # orkestra setup
-    "cli.setup_no_engine": ("setup: no engine found (no Claude CLI, no Cursor home, no Copilot home); nothing was "
+    "cli.setup_no_engine": ("setup: no engine found (no Claude CLI, no Cursor home, no Copilot home, no Pi home); nothing was "
                             "installed."),
     "cli.setup_ask_claude": "Install the Claude marketplace and plugin?",
     "cli.setup_ask_cursor": "Install the Cursor skill, subagents and hooks?",
@@ -79,6 +79,7 @@ EN: Dict[str, str] = {
     "cli.setup_claude_manual": ("setup: Claude Code did not accept every step (see the messages above). Run them yourself, "
                                 "then repeat `orkestra setup`:\n  claude plugin marketplace add {root}\n  claude plugin "
                                 "install orkestra@orkestra-local -s user"),
+    "cli.setup_claude_restart": "setup: the Claude plugin was refreshed. Restart Claude Code to load the new guards.",
     "cli.setup_marketplace_moved": ("setup: the marketplace {name} is registered from another location; registering it "
                                     "again for {root}"),
     "cli.launchd_macos_only": ("--launchd writes a macOS LaunchAgent and works on macOS only. Elsewhere run "
@@ -121,9 +122,13 @@ EN: Dict[str, str] = {
     "cli.doctor_copy_same": "{path} (version {version}) matches this checkout",
     "cli.doctor_copy_differs": ("{path} (version {version}) differs from this checkout: Claude Code still runs that older "
                                 "copy. Update it with `orkestra setup` or `claude plugin update orkestra@orkestra-local` "
-                                "(when it says up to date, raise the plugin version first)"),
+                                "(restart Claude Code afterwards). Repair line: `claude plugin marketplace update orkestra-local && claude "
+                                "plugin update orkestra@orkestra-local`. If it still reports up to date, run `claude plugin uninstall "
+                                "orkestra@orkestra-local` and then `orkestra setup`"),
     "cli.doctor_active": "active",
     "cli.doctor_not_installed": "not installed",
+    "cli.doctor_cursor_not_installed": "not installed (`orkestra cursor install`)",
+    "cli.doctor_copilot_not_installed": "not installed (`orkestra copilot install`)",
     "cli.doctor_engines_ready": "{count} ready",
     "cli.doctor_engines_none": "none: install Claude, `orkestra cursor install`, or Copilot hooks",
     "cli.doctor_configured": "configured",
@@ -133,12 +138,43 @@ EN: Dict[str, str] = {
     "cli.doctor_some_failed": "doctor: some required checks FAILED",
     # --- Cursor / Copilot kits: what an install or uninstall did (or, in a dry run, would do) ----------------------
     "cli.kit_backup": "backup {target} → {backup}",
+    "cli.copilot_bad_value": "copilot {key}: '{value}' is not valid (from {origin}). Choose one of: {allowed}",
+    "cli.copilot_bad_model": "copilot model: '{value}' is not a usable model id (from {origin}). Use letters, digits and . _ - : / or auto",
+    "cli.copilot_bad_bool": "copilot {key}: '{value}' is not true or false (from {origin})",
+    "cli.run_copilot_flags_only": "--model, --effort, --context and --allow-all/--no-allow-all apply to --engine copilot only",
+    "cli.copilot_vscode_target": "choose where to write: --workspace PATH or --user (exactly one) together with --apply",
+    "cli.copilot_vscode_agent_workspace": "Note: --model also writes an agent file, but only together with --workspace PATH; here it set chat.defaultModel only.",
+    "cli.copilot_vscode_machine_scope": "chat.pluginLocations is machine-scoped in VS Code: a workspace settings file is ignored for it, so the plugin was NOT registered. Run again with --user to register it.",
+    "cli.copilot_vscode_effort_needs_model": "--effort only pins the agent file made by --model: add --model ID (VS Code has no effort setting).",
+    "cli.copilot_vscode_plan": "vscode: plan only, nothing written ({path}). Add --apply with --workspace PATH or --user to write it.",
+    "cli.copilot_vscode_done": "vscode: written ({path}). Reload the VS Code window.",
+    "cli.copilot_vscode_limits": "VS Code limits: reasoning effort and context size have NO setting (chat model picker only). The default model (chat.defaultModel) and permissions (chat.defaultConfiguration, chat.permissions.default) are real settings and are written with --apply. A custom agent can pin model and reasoning-effort (Local agent support is unverified). The models the signed-in account can use are not verifiable offline: if VS Code rejects the model, pick another or pass --model. Orkestra CLI runs (orkestra run --engine copilot) use gpt-6-luna, max effort, long context and allow-all by default.",
+    "cli.copilot_vscode_warn": "Warning: chat.permissions.default disables approval prompts for every tool call in VS Code. Enterprise policy can still force Manual.",
+    "cli.kit_vscode_bad_json": "{path} is not plain JSON (comments or trailing commas?): nothing changed. Edit it by hand.",
+    "cli.kit_vscode_written": "write VS Code settings {path}",
+    "cli.kit_vscode_removed": "remove Orkestra keys from VS Code settings {path}",
+    "cli.kit_vscode_agent_written": "write agent file {path}",
+    "cli.kit_vscode_agent_removed": "remove agent file {path}",
+    "cli.kit_vscode_agent_foreign": "{path} exists and is not Orkestra's: nothing changed",
+    "cli.kit_context_unsupported": "this Copilot CLI has no --context flag: the context setting is omitted",
+    "cli.kit_profile": "model {model} ({model_src}), effort {effort} ({effort_src}), context {context} ({context_src}), allow-all {allow} ({allow_src})",
+    "cli.kit_on": "on",
+    "cli.kit_off": "off",
+    "cli.kit_src_default": "default",
+    "cli.kit_src_config": "config",
+    "cli.kit_src_request": "request",
+    "cli.kit_src_flag": "flag",
+    "cli.kit_src_run": "run",
     "cli.kit_link": "link {dst} → {src}",
     "cli.kit_copy": "copy {dst} → {src}",
     "cli.kit_copy_nolink": "copy {dst} → {src}  (symlink unavailable)",
     "cli.kit_remove": "remove {path}",
-    "cli.kit_hooks_added": "update hooks.json: orkestra entries for {events}",
-    "cli.kit_hooks_removed": "update hooks.json: orkestra entries removed",
+    "cli.kit_hooks_added": "update {path}: orkestra entries for {events}",
+    "cli.kit_copilot_manifest": "write the Copilot plugin manifest (plugin.json)",
+    "cli.kit_copilot_manifest_removed": "remove the Copilot plugin manifest (plugin.json)",
+    "cli.kit_copilot_skill": "write Copilot skill {name}",
+    "cli.kit_copilot_skill_removed": "remove Copilot skill {name}",
+    "cli.kit_hooks_removed": "update {path}: orkestra entries removed",
     "cli.kit_write_cmd_shim": "write {path} → {target}  (Windows PATH shim)",
     "cli.kit_link_shim": "link {path} → {target}  (Cursor's shell needs `orkestra` on PATH)",
     "cli.kit_write_shim_wrapper": "write {path} → {target}  (symlink unavailable; shell wrapper)",
@@ -213,7 +249,7 @@ TR: Dict[str, str] = {
     "cli.request_file_encoding": ("istek dosyası {path} UTF-8 metin değil. UTF-8 (ya da BOM'lu UTF-16) olarak kaydedip "
                                   "yeniden deneyin."),
     "cli.request_file_empty": "istek dosyası {path} boş (istek ne yapılacağını söylemeli)",
-    "cli.setup_no_engine": ("setup: motorsuz. Claude CLI, Cursor dizini ya da Copilot dizini bulunamadı; hiçbir şey "
+    "cli.setup_no_engine": ("setup: motorsuz. Claude CLI, Cursor dizini, Copilot dizini ya da Pi dizini bulunamadı; hiçbir şey "
                             "kurulmadı."),
     "cli.setup_ask_claude": "Claude marketplace/plugin kurulsun mu?",
     "cli.setup_ask_cursor": "Cursor skill, alt-ajan ve hooks kurulsun mu?",
@@ -242,6 +278,7 @@ TR: Dict[str, str] = {
     "cli.setup_claude_manual": ("setup: Claude Code her adımı kabul etmedi (yukarıdaki mesajlara bak). Adımları kendiniz "
                                 "çalıştırın, sonra `orkestra setup` komutunu yineleyin:\n  claude plugin marketplace add "
                                 "{root}\n  claude plugin install orkestra@orkestra-local -s user"),
+    "cli.setup_claude_restart": "setup: Claude eklentisi yenilendi. Yeni korumalar için Claude Code'u yeniden başlatın.",
     "cli.setup_marketplace_moved": ("setup: {name} marketplace'i başka bir konumdan kayıtlı; {root} için yeniden "
                                     "kaydediliyor"),
     "cli.launchd_macos_only": ("--launchd yalnız macOS'ta çalışan bir LaunchAgent yazar. Diğer sistemlerde "
@@ -281,9 +318,13 @@ TR: Dict[str, str] = {
     "cli.doctor_copy_same": "{path} (sürüm {version}) bu checkout ile aynı",
     "cli.doctor_copy_differs": ("{path} (sürüm {version}) bu checkout'tan farklı: Claude Code hâlâ o eski kopyayı çalıştırıyor. "
                                 "`orkestra setup` ya da `claude plugin update orkestra@orkestra-local` ile güncelleyin "
-                                "(güncel diyorsa önce eklenti sürümünü yükseltin)"),
+                                "(sonra Claude Code'u yeniden başlatın). Onarım satırı: `claude plugin marketplace update orkestra-local && "
+                                "claude plugin update orkestra@orkestra-local`. Hâlâ güncel görünüyorsa `claude plugin uninstall "
+                                "orkestra@orkestra-local` çalıştırıp ardından `orkestra setup` yapın"),
     "cli.doctor_active": "etkin",
     "cli.doctor_not_installed": "kurulu değil",
+    "cli.doctor_cursor_not_installed": "kurulu değil (`orkestra cursor install`)",
+    "cli.doctor_copilot_not_installed": "kurulu değil (`orkestra copilot install`)",
     "cli.doctor_engines_ready": "{count} hazır",
     "cli.doctor_engines_none": "hiç yok: Claude kurun, `orkestra cursor install` ya da Copilot hook'larını çalıştırın",
     "cli.doctor_configured": "yapılandırılmış",
@@ -293,12 +334,43 @@ TR: Dict[str, str] = {
     "cli.doctor_some_failed": "doctor: bazı gerekli kontroller BAŞARISIZ",
     # --- Cursor / Copilot kits ---------------------------------------------------------------------------------
     "cli.kit_backup": "yedekle {target} → {backup}",
+    "cli.copilot_bad_value": "copilot {key}: '{value}' geçerli değil ({origin} kaynaklı). Şunlardan birini seç: {allowed}",
+    "cli.copilot_bad_model": "copilot model: '{value}' kullanılabilir bir model kimliği değil ({origin} kaynaklı). Harf, rakam ve . _ - : / ya da auto kullan",
+    "cli.copilot_bad_bool": "copilot {key}: '{value}' true ya da false değil ({origin} kaynaklı)",
+    "cli.run_copilot_flags_only": "--model, --effort, --context ve --allow-all/--no-allow-all yalnız --engine copilot için geçerli",
+    "cli.copilot_vscode_target": "nereye yazılacağını seç: --apply ile birlikte --workspace PATH ya da --user (yalnız biri)",
+    "cli.copilot_vscode_agent_workspace": "Not: --model ajan dosyasını da yazar, ama yalnız --workspace PATH ile; burada yalnız chat.defaultModel yazıldı.",
+    "cli.copilot_vscode_machine_scope": "chat.pluginLocations VS Code'da makine kapsamlıdır: çalışma alanı ayar dosyası bunun için yok sayılır, bu yüzden eklenti KAYDEDİLMEDİ. Kaydetmek için --user ile yeniden çalıştır.",
+    "cli.copilot_vscode_effort_needs_model": "--effort yalnız --model ile yazılan ajan dosyasını sabitler: --model ID ekle (VS Code'da efor ayarı yok).",
+    "cli.copilot_vscode_plan": "vscode: yalnız plan, hiçbir şey yazılmadı ({path}). Yazmak için --apply ile --workspace PATH ya da --user ekle.",
+    "cli.copilot_vscode_done": "vscode: yazıldı ({path}). VS Code penceresini yeniden yükle.",
+    "cli.copilot_vscode_limits": "VS Code sınırları: reasoning effort ve context boyutu için ayar YOK (yalnız sohbet model seçici). Varsayılan model (chat.defaultModel) ve izinler (chat.defaultConfiguration, chat.permissions.default) gerçek ayarlardır ve --apply ile yazılır. Özel bir ajan model ve reasoning-effort sabitleyebilir (Local ajan desteği doğrulanmadı). Giriş yapılan hesabın kullanabildiği modeller çevrimdışı doğrulanamaz: VS Code modeli reddederse başkasını seç ya da --model ver. Orkestra CLI run'ları (orkestra run --engine copilot) varsayılan olarak gpt-6-luna, max efor, uzun context ve allow-all kullanır.",
+    "cli.copilot_vscode_warn": "Uyarı: chat.permissions.default VS Code'da her araç çağrısı için onay sormayı kapatır. Kurumsal politika yine de Manual'a zorlayabilir.",
+    "cli.kit_vscode_bad_json": "{path} düz JSON değil (yorum ya da sondaki virgül?): hiçbir şey değişmedi. Elle düzenle.",
+    "cli.kit_vscode_written": "VS Code ayarlarını yaz {path}",
+    "cli.kit_vscode_removed": "Orkestra anahtarlarını VS Code ayarlarından kaldır {path}",
+    "cli.kit_vscode_agent_written": "ajan dosyasını yaz {path}",
+    "cli.kit_vscode_agent_removed": "ajan dosyasını kaldır {path}",
+    "cli.kit_vscode_agent_foreign": "{path} var ve Orkestra'nın değil: hiçbir şey değişmedi",
+    "cli.kit_context_unsupported": "bu Copilot CLI'da --context bayrağı yok: context ayarı atlanır",
+    "cli.kit_profile": "model {model} ({model_src}), efor {effort} ({effort_src}), context {context} ({context_src}), allow-all {allow} ({allow_src})",
+    "cli.kit_on": "açık",
+    "cli.kit_off": "kapalı",
+    "cli.kit_src_default": "varsayılan",
+    "cli.kit_src_config": "yapılandırma",
+    "cli.kit_src_request": "istek",
+    "cli.kit_src_flag": "bayrak",
+    "cli.kit_src_run": "run",
     "cli.kit_link": "bağla {dst} → {src}",
     "cli.kit_copy": "kopyala {dst} → {src}",
     "cli.kit_copy_nolink": "kopyala {dst} → {src}  (symlink kullanılamıyor)",
     "cli.kit_remove": "kaldır {path}",
-    "cli.kit_hooks_added": "hooks.json güncelle: {events} için orkestra girdileri",
-    "cli.kit_hooks_removed": "hooks.json güncelle: orkestra girdileri kaldırıldı",
+    "cli.kit_hooks_added": "{path} güncelle: {events} için orkestra girdileri",
+    "cli.kit_copilot_manifest": "Copilot eklenti bildirimini (plugin.json) yaz",
+    "cli.kit_copilot_manifest_removed": "Copilot eklenti bildirimini (plugin.json) kaldır",
+    "cli.kit_copilot_skill": "Copilot becerisi {name} yaz",
+    "cli.kit_copilot_skill_removed": "Copilot becerisi {name} kaldır",
+    "cli.kit_hooks_removed": "{path} güncelle: orkestra girdileri kaldırıldı",
     "cli.kit_write_cmd_shim": "yaz {path} → {target}  (Windows PATH kısayolu)",
     "cli.kit_link_shim": "bağla {path} → {target}  (Cursor'ın kabuğu için `orkestra` PATH içinde olmalı)",
     "cli.kit_write_shim_wrapper": "yaz {path} → {target}  (symlink kullanılamıyor; kabuk sarmalayıcısı)",

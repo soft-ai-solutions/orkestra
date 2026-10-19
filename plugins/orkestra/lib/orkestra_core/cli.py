@@ -1350,6 +1350,10 @@ def cmd_run(a: argparse.Namespace) -> int:
         if not CK.hooks_active(project):            # without them the agent would run unguarded
             raise OrkestraError("orkestra's hooks are not installed for Cursor — run `orkestra cursor install` once "
                                 "(it keeps your own ~/.cursor/hooks.json entries), then try again.")
+    copilot_flags = {"model": getattr(a, "model", None), "reasoning_effort": getattr(a, "effort", None),
+                     "context": getattr(a, "context", None), "allow_all": getattr(a, "allow_all", None)}
+    if engine != "copilot" and any(v is not None for v in copilot_flags.values()):
+        raise OrkestraError(i18n.t("cli.run_copilot_flags_only"))
     plugin_dir = ""
     if engine == "copilot":
         plugin_dir = EN.copilot_plugin_dir(cfg)
@@ -1365,6 +1369,11 @@ def cmd_run(a: argparse.Namespace) -> int:
     else:
         opts_pi_sid = ""
     opts = dict(((cfg.get("engine") or {}).get(engine)) or {})
+    if engine == "copilot":
+        try:                                        # flag > request words > config > default (engines.copilot_resolve)
+            opts = EN.copilot_resolve(cfg, request, copilot_flags)
+        except EN.EngineError as exc:
+            raise OrkestraError(str(exc))
     if opts_pi_sid:
         opts["session_id"] = opts_pi_sid
         from . import pikit as PK
@@ -1381,6 +1390,10 @@ def cmd_run(a: argparse.Namespace) -> int:
     _require_usable_home()
     st = R.open_run_for_request(project, request, engine=engine, mode="interactive", approval_mode=approval_mode)
     rid = st["run_id"]
+    if engine == "copilot":                         # a resume (watchdog, bridge) reuses what this run started with
+        from . import state as ST
+        with ST.StateTxn(project, rid) as run_st:
+            run_st["copilot_profile"] = EN.copilot_profile_of(opts)
     if opts_pi_sid:
         from . import activity as A
         from . import state as ST
@@ -1414,7 +1427,7 @@ def cmd_cursor(a: argparse.Namespace) -> int:
             _out(i18n.t(("cli.cursor_assets_would" if dry else "cli.cursor_assets_written") if done else "cli.cursor_assets_current",
                         count=len(done), files=", ".join(done)))
         elif a.action == "install":
-            done = CK.install(copy=a.copy, dry=a.dry_run)
+            done = CK.install(copy=a.copy, dry=a.dry_run, fail_closed=a.fail_closed)
             for line in done:
                 _out(i18n.t("cli.kit_would", action=line) if a.dry_run else line)
             _out(i18n.t("cli.cursor_nothing_to_change" if not done else
@@ -1479,9 +1492,11 @@ def cmd_pi(a: argparse.Namespace) -> int:
 def cmd_copilot(a: argparse.Namespace) -> int:
     """Copilot side: install/uninstall/status for hooks under ~/.copilot/plugins/orkestra."""
     from . import copilotkit as CK
-    if _ASKER:
+    if _ASKER and not (a.action == "vscode" and not a.apply):
         raise OrkestraError("`orkestra copilot …` changes the Copilot configuration: run it from your terminal.")
     try:
+        if a.action == "vscode":
+            return _copilot_vscode(a, CK)
         if a.action == "install":
             done = CK.install(dry=a.dry_run)
             for line in done:
@@ -1504,6 +1519,39 @@ def cmd_copilot(a: argparse.Namespace) -> int:
             return 0 if ok else 1
     except EN.EngineError as exc:
         raise OrkestraError(str(exc))
+    return 0
+
+
+def _copilot_vscode(a: argparse.Namespace, CK: Any) -> int:
+    """Show (default) or apply (--apply) the documented VS Code settings; say plainly what cannot be pinned."""
+    if a.apply and bool(a.workspace) == bool(a.user):
+        raise OrkestraError(i18n.t("cli.copilot_vscode_target"))
+    if a.effort and not a.model:
+        raise OrkestraError(i18n.t("cli.copilot_vscode_effort_needs_model"))
+    plugin = EN.copilot_plugin_dir(paths.global_config()) or str(CK.plugin_dir())
+    user_cfg = paths.read_json(paths.orkestra_home() / "config.json", default={}) or {}
+    prof = EN.copilot_resolve(user_cfg if isinstance(user_cfg, dict) else {}, flags={"model": a.model})
+    default_cfg = CK.DEFAULT_CONFIGURATION if prof["allow_all"] else None
+    target = CK.vscode_workspace_settings(a.workspace) if a.workspace else CK.vscode_user_settings()
+    dry = not a.apply or a.dry_run
+    done = CK.vscode_settings(target, plugin, a.permissions, a.remove, dry, model=prof["model"],
+                              default_config=default_cfg, plugin_locations=not a.workspace)
+    if a.model and a.workspace:
+        done += CK.vscode_agent(a.workspace, a.model, a.effort, a.remove, dry)
+    elif a.remove and a.workspace:
+        done += CK.vscode_agent(a.workspace, "", None, True, dry)
+    for line in done:
+        _out(i18n.t("cli.kit_would", action=line) if dry else line)
+    _out(i18n.t("cli.copilot_nothing_to_change" if not done else
+                ("cli.copilot_vscode_plan" if dry else "cli.copilot_vscode_done"), path=target))
+    if not a.remove:
+        if a.workspace:
+            _out(i18n.t("cli.copilot_vscode_machine_scope"))
+        if a.model and not a.workspace:
+            _out(i18n.t("cli.copilot_vscode_agent_workspace"))
+        _out(i18n.t("cli.copilot_vscode_limits"))
+        if a.permissions or default_cfg:
+            _out(i18n.t("cli.copilot_vscode_warn"))
     return 0
 
 
@@ -1577,7 +1625,12 @@ def _setup_install_claude() -> bool:
         registered = False
     ok = (step("plugin", "marketplace", "update", "orkestra-local") if registered
           else step("plugin", "marketplace", "add", str(root))) and ok
-    return step("plugin", "install", "orkestra@orkestra-local", "-s", "user") and ok
+    ok = step("plugin", "install", "orkestra@orkestra-local", "-s", "user") and ok
+    # An install over an existing install keeps the cached copy; `update` refreshes it. "Already up to date" is a
+    # non-zero exit on some versions, so a failed update never fails the setup.
+    if ok and step("plugin", "update", "orkestra@orkestra-local"):
+        _out(i18n.t("cli.setup_claude_restart"))
+    return ok
 
 
 def cmd_setup(a: argparse.Namespace) -> int:
@@ -1867,8 +1920,13 @@ def cmd_doctor(a: argparse.Namespace) -> int:
     cursor_ready = CK.hooks_active()
     copilot_dir = EN.copilot_plugin_dir(cfg)
     copilot_ready = EN.copilot_hooks_active(copilot_dir)
-    soft(cursor_ready, "cursor hooks", i18n.t("cli.doctor_active" if cursor_ready else "cli.doctor_not_installed"))
-    soft(copilot_ready, "copilot hooks", i18n.t("cli.doctor_active" if copilot_ready else "cli.doctor_not_installed"))
+    soft(cursor_ready, "cursor hooks", i18n.t("cli.doctor_active" if cursor_ready else "cli.doctor_cursor_not_installed"))
+    soft(copilot_ready, "copilot hooks", i18n.t("cli.doctor_active" if copilot_ready else "cli.doctor_copilot_not_installed"))
+    from . import copilotkit as Cop2
+    profile_detail, context_ok = Cop2.profile_info(cfg, EN.binary("copilot", cfg))
+    soft(True, "copilot profile", profile_detail)
+    if context_ok is False:
+        soft(False, "copilot context", i18n.t("cli.kit_context_unsupported"))
     from . import pikit as PiK
     pi_rows = {label: (good, detail) for good, label, detail in PiK.status()}
     pi_skills_ok, pi_skills_detail = pi_rows["pi skills"]

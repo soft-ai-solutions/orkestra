@@ -2431,15 +2431,9 @@ _STARTED = time.time()                          # when this process began servin
 
 
 def plugin_version() -> str:
-    """The Orkestra version, read once from the plugin manifest ('' when this checkout has none)."""
-    global _VERSION
-    if _VERSION is None:
-        try:
-            data = read_json(Path(__file__).resolve().parents[2] / ".claude-plugin" / "plugin.json")
-            _VERSION = str(data.get("version") or "") if isinstance(data, dict) else ""
-        except Exception:
-            _VERSION = ""
-    return _VERSION
+    """The Orkestra release number (the manifests carry none, so Claude Code keys its cache on the commit)."""
+    from . import __version__
+    return __version__
 
 
 _VERSION: Optional[str] = None

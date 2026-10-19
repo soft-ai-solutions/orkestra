@@ -667,7 +667,11 @@ class TestWriters(RunBase):
             proj = self.make_project(f"mem-{code}")
             self.ork(code, "init", "-p", f"mem-{code}")
             tpl = helpers.PLUGIN / "templates" / code / "memory"
-            for name in ("PROJECT.md", "FEATURES.md", "DECISIONS.md", "LEARNINGS.md"):
+            observed = (proj / ".orkestra" / "memory" / "PROJECT.md").read_text(encoding="utf-8")
+            self.assertTrue(observed.startswith("# Project: " + proj.name), f"{code}/PROJECT.md")
+            self.assertIn("## Summary", observed)
+            self.assertIn("unknown", observed)
+            for name in ("FEATURES.md", "DECISIONS.md", "LEARNINGS.md"):
                 want = (tpl / name).read_text(encoding="utf-8").replace("{{project}}", proj.name)
                 got = (proj / ".orkestra" / "memory" / name).read_text(encoding="utf-8")
                 self.assertEqual(got, want, f"{code}/{name}")

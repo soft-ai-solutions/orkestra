@@ -1,6 +1,6 @@
 ---
 name: orkestra-status
-description: "Show where Orkestra runs stand — phase, tasks, evidence, approval, gate results — for the current or a named project, without changing anything."
+description: "Show where Orkestra runs stand — phase, tasks, evidence, approval, gate results — for the current or a named project, without changing anything. Use when the user asks about the progress or state of an orkestra run (status, durum, nerede kaldık, what is running, where are we)."
 ---
 [orkestra · Cursor engine] The instructions below were written for Claude Code. In Cursor:
 - A subagent `orkestra:<name>` is the Cursor subagent `orkestra-<name>`: launch it with the Task tool

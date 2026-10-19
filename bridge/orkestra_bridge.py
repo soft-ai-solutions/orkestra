@@ -94,6 +94,8 @@ DEFAULTS: Dict[str, Any] = {
     "copilot_plugin_dir": "",
     "copilot_model": "",
     "copilot_reasoning_effort": "",
+    "copilot_context": "",           # default | long_context ("" = engine.copilot.context)
+    "copilot_allow_all": None,       # true | false (None = engine.copilot.allow_all)
     "copilot_max_autopilot_continues": 0,
     "copilot_extra_args": [],
     "permission_mode": "auto",
@@ -273,31 +275,44 @@ def copilot_bin(cfg: Dict[str, Any]) -> Optional[str]:
 
 
 def copilot_options(cfg: Dict[str, Any], approval_mode: str = "autopilot", request: str = "",
-                    selected_model: str = "", selected_effort: str = "") -> Dict[str, Any]:
-    engine_cfg = dict(((OP.global_config().get("engine") or {}).get("copilot") or {}))
+                    selected_model: str = "", selected_effort: str = "", selected_context: str = "",
+                    selected_allow_all: Any = None) -> Dict[str, Any]:
+    """engine.copilot options for one turn: the single resolver (engines.copilot_resolve) decides, like `orkestra run`."""
     bridge_keys = {
         "model": "copilot_model",
         "reasoning_effort": "copilot_reasoning_effort",
+        "context": "copilot_context",
+        "allow_all": "copilot_allow_all",
         "max_autopilot_continues": "copilot_max_autopilot_continues",
         "plugin_dir": "copilot_plugin_dir",
         "extra_args": "copilot_extra_args",
     }
-    for option, key in bridge_keys.items():
-        if cfg.get(key):
-            engine_cfg[option] = cfg[key]
+    extra = {option: cfg[key] for option, key in bridge_keys.items() if cfg.get(key) not in (None, "", 0, [])}
+    if cfg.get("copilot_allow_all") is False:
+        extra["allow_all"] = False
+    selected = {"model": selected_model, "reasoning_effort": selected_effort, "context": selected_context,
+                "allow_all": selected_allow_all}
+    engine_cfg = EN.copilot_resolve(OP.global_config(), request, None, selected, extra)
     if not engine_cfg.get("plugin_dir"):
         engine_cfg["plugin_dir"] = EN.copilot_plugin_dir({"engine": {"copilot": engine_cfg}})
     engine_cfg["approval_mode"] = approval_mode
-    engine_cfg["model"] = EN.copilot_model_for_request(request, selected_model or str(engine_cfg.get("model") or "gpt-6-luna"))
-    engine_cfg["reasoning_effort"] = EN.copilot_effort_for_request(
-        request, selected_effort or str(engine_cfg.get("reasoning_effort") or "max"))
     return engine_cfg
+
+
+def _store_copilot_profile(job: Dict[str, Any], options: Dict[str, Any]) -> None:
+    job["copilot_model"] = options["model"]
+    job["copilot_reasoning_effort"] = options["reasoning_effort"]
+    job["copilot_context"] = options["context"]
+    job["copilot_allow_all"] = options["allow_all"]
 
 
 def copilot_ready(cfg: Dict[str, Any]) -> str:
     if not copilot_bin(cfg):
         return t("bridge.engine.copilot_cli_missing")
-    options = copilot_options(cfg)
+    try:
+        options = copilot_options(cfg)
+    except EN.EngineError as exc:
+        return str(exc)
     if not EN.copilot_hooks_active(str(options.get("plugin_dir") or "")):
         return t("bridge.engine.copilot_hooks_missing")
     return ""
@@ -400,7 +415,10 @@ def start_job(cfg: Dict[str, Any], project_name: str, request: str, chat_id: Opt
         raise ValueError(t("bridge.job.empty_request"))
     engine = pick_engine(cfg, engine)
     approval_mode = "manual" if INTENT.manual_approval_requested(request) else "autopilot"
-    copilot_profile = copilot_options(cfg, approval_mode, request) if engine == "copilot" else {}
+    try:
+        copilot_profile = copilot_options(cfg, approval_mode, request) if engine == "copilot" else {}
+    except EN.EngineError as exc:
+        raise ValueError(str(exc))
     if engine == "cursor":
         why = cursor_ready(cfg, project)
         if why:
@@ -418,8 +436,7 @@ def start_job(cfg: Dict[str, Any], project_name: str, request: str, chat_id: Opt
              "turns": [], "last_message": "", "engine": engine,
                "approval_mode": approval_mode}
         if engine == "copilot":
-            job["copilot_model"] = copilot_profile["model"]
-            job["copilot_reasoning_effort"] = copilot_profile["reasoning_effort"]
+            _store_copilot_profile(job, copilot_profile)
         save_job(job)
     if engine == "cursor":
         try:        # Cursor hands the chat id out itself (claude takes the uuid above as --session-id)
@@ -469,10 +486,13 @@ def reply_job(cfg: Dict[str, Any], job: Dict[str, Any], text: str) -> Dict[str, 
     if INTENT.manual_approval_requested(text):
         job["approval_mode"] = "manual"
     if job.get("engine") == "copilot":
-        default_model = str(job.get("copilot_model") or copilot_options(cfg).get("model") or "gpt-6-luna")
-        job["copilot_model"] = EN.copilot_model_for_request(text, default_model)
-        default_effort = str(job.get("copilot_reasoning_effort") or copilot_options(cfg).get("reasoning_effort") or "max")
-        job["copilot_reasoning_effort"] = EN.copilot_effort_for_request(text, default_effort)
+        try:
+            _store_copilot_profile(job, copilot_options(
+                cfg, request=text, selected_model=str(job.get("copilot_model") or ""),
+                selected_effort=str(job.get("copilot_reasoning_effort") or ""),
+                selected_context=str(job.get("copilot_context") or ""), selected_allow_all=job.get("copilot_allow_all")))
+        except EN.EngineError as exc:
+            raise ValueError(str(exc))
     job["auto_resumes"] = 0                  # a human answered: the automatic-continuation budget starts over
     run_turn(cfg, job, text, new=False)
     return job
@@ -638,7 +658,9 @@ def _prepare_turn(cfg: Dict[str, Any], job: Dict[str, Any], prompt: str, new: bo
         binary = copilot_bin(cfg)
         options = copilot_options(cfg, str(job.get("approval_mode") or "autopilot"),
                                   selected_model=str(job.get("copilot_model") or ""),
-                                  selected_effort=str(job.get("copilot_reasoning_effort") or ""))
+                                  selected_effort=str(job.get("copilot_reasoning_effort") or ""),
+                                  selected_context=str(job.get("copilot_context") or ""),
+                                  selected_allow_all=job.get("copilot_allow_all"))
         spec = EN.headless_command("copilot", str(binary), job["session_id"], prompt, new, options)
     elif engine == "pi":
         binary = EN.binary("pi", OP.global_config())

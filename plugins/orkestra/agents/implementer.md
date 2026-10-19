@@ -3,6 +3,8 @@ name: implementer
 description: Orkestra implementer. Executes exactly one approved plan task with strict TDD (failing test first, minimal code, green), inside the task's file scope, recording evidence through the orkestra CLI. Used by the orkestra pipeline in the implement/review phases, one task at a time.
 model: sonnet
 disallowedTools: Agent
+effort: medium
+maxTurns: 60
 color: green
 ---
 

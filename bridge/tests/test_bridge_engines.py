@@ -38,6 +38,7 @@ class BridgeEnginesTest(unittest.TestCase):
         cls.copilot_plugin = cls.tmp / "copilot-plugin"
         copilot_hooks = cls.copilot_plugin / "com.github.copilot" / "hooks" / "hooks.json"
         copilot_hooks.parent.mkdir(parents=True)
+        (cls.copilot_plugin / "plugin.json").write_text(json.dumps({"name": "orkestra"}))
         hook_script = PLUGIN / "hooks" / "copilot_hook.py"
         copilot_hooks.write_text(json.dumps({"hooks": {
             event: [{"command": f"{sys.executable} {hook_script} {event}", "timeoutSec": 20}]
@@ -47,7 +48,7 @@ class BridgeEnginesTest(unittest.TestCase):
         cls.fake_copilot.write_text(
             "#!/usr/bin/env python3\nimport json, os, sys\n"
             "args = sys.argv[1:]\n"
-            "sid = args[args.index('--session-id') + 1] if '--session-id' in args else args[args.index('--resume') + 1]\n"
+            "sid = next(a.split('=', 1)[1] for a in args if a.startswith(('--session-id=', '--resume=')))\n"
             "with open(os.path.join(os.getcwd(), '.fake-copilot.jsonl'), 'a') as f: f.write(json.dumps(args) + '\\n')\n"
             "print(json.dumps({'type': 'result', 'result': 'copilot-ok', 'session_id': sid}))\n")
         cls.fake_copilot.chmod(0o755)

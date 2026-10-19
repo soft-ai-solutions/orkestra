@@ -76,13 +76,13 @@ Sonucun modelin gücüne daha az bağlı olmasını sağlayanlar:
 
 ## Hızlı başlangıç
 
-Python 3.9 ya da üstü, git ve Claude Code, Cursor CLI (`agent`) ya da Copilot CLI'den (`copilot`) en az biri gerekir.
+Python 3.9 ya da üstü, git ve Claude Code, Cursor CLI (`agent`), Copilot CLI (`copilot`) ya da Pi'den (`pi`) en az biri gerekir.
 `pip install` edilecek bir şey yok.
 
 ```bash
 git clone https://github.com/soft-ai-solutions/orkestra.git
 cd orkestra
-python3 plugins/orkestra/bin/orkestra setup      # Claude Code, Cursor ve Copilot'u bulur, her birini açmadan önce sorar (--yes: soru yok)
+python3 plugins/orkestra/bin/orkestra setup      # Claude Code, Cursor, Copilot ve Pi'yi bulur, her birini açmadan önce sorar (--yes: soru yok)
 python3 plugins/orkestra/bin/orkestra doctor     # gerekli kontroller geçtiğinde ve en az bir motor hazırsa çıkış kodu 0
 ```
 
@@ -144,10 +144,29 @@ durumunda taşır ve yarım kalan run'ı başlatan motor sürdürür.
   kaldırır. Yalnız Orkestra run'ı taşıyan sohbetler denetlenir; her oturum guard'larını tüm Cursor sohbetlerine uygulamak
   için `engine.cursor.global_guards` değerini aç.
 - **Pi**: `orkestra pi install` Orkestra skill'lerini `~/.pi/agent/skills` altına ve araç eklentisini `~/.pi/agent/extensions` altına yazar. `orkestra pi status` ve `orkestra pi uninstall` Cursor kurulum yüzeyiyle aynı işi görür. Eklenti her araç çağrısını Claude ve Cursor ile aynı karardan geçirir. Bağlı bir koşu, tur duracakken sonraki adıma geçer. Sohbette komut `/skill:orkestra-run`. Terminalde `orkestra run --engine pi`, skill'ler ve eklenti kurulmadan açılmaz. Kurulunca Pi'yi tüm playbook metnini yapıştırmadan bu kısa komutla başlatır.
-- **GitHub Copilot** (CLI ve VS Code): `orkestra copilot install` hook girdilerini yazar; Orkestra ajan eklentisini ve
-  yaşam döngüsü hook'larını host'ta yine sen etkinleştirirsin. Hook'suz bir Copilot oturumu denetimli run başlatmamalıdır.
-  Copilot CLI başlatmalarında varsayılan `gpt-6-luna` ve en yüksek reasoning effort'tur; istekte açıkça yazılan desteklenen
-  bir model ya da effort bunu geçersiz kılar. VS Code ajanları sohbette seçtiğin modeli devralır.
+- **GitHub Copilot** (CLI ve VS Code): `orkestra copilot install` hook girdilerini yazar.
+  `orkestra run --engine copilot` CLI'yi `--plugin-dir` ile başlatır; elle açtığın CLI oturumu için
+  `copilot --plugin-dir ~/.copilot/plugins/orkestra` kullan, VS Code'da eklentiyi kendin etkinleştir. Hook'suz bir Copilot oturumu denetimli run başlatmamalıdır.
+  Copilot CLI başlatmalarında varsayılan model `gpt-6-luna`, reasoning effort `max`, `long_context` ve allow-all'dır
+  (`--allow-all-tools --allow-all-paths --allow-all-urls`; Orkestra'nın guard'ları ve `--excluded-tools` yürürlükte kalır; `--no-allow-all` yalnız `--allow-all-paths` ve `--allow-all-urls` bayraklarını düşürür, `--allow-all-tools` yine geçer, yani her araç sormadan çalışır),
+  tam otomatik (`--autopilot --no-ask-user`). Başkasını run başına
+  `orkestra run --engine copilot --model <id> --effort none|minimal|low|medium|high|xhigh|max --context default|long_context [--no-allow-all]`,
+  istekteki sözlerle (`use gpt-6-sol`, `effort high`, `uzun context kullan`, `varsayılan context kullan`, `hepsine izin verme`; istek sözleri allow-all'ı yalnız düşürebilir, yükseltemez ve yalnız açık komutlar sayılır) ya da kalıcı olarak
+  `~/.orkestra/config.json` içindeki `engine.copilot` ile seç. Sıra: bayrak, istek, run ile saklanan seçim (resume ve
+  watchdog onu yeniden kullanır), yapılandırma, varsayılan. `orkestra copilot status` ve `orkestra doctor` geçerli
+  değerleri ve her birinin kaynağını gösterir. Model kimliği yazıldığı gibi geçirilir (hesapta yoksa CLI söyler);
+  bir modelin `max` ya da `long_context` desteği CLI tarafından açıklanmaz ve denetlenmez. `gpt-6-luna` yapılandırılmış varsayılandır, doğrulanmış değildir: giriş yapılan hesabın hangi modelleri kullanabildiği çevrimdışı denetlenemez, yoksa ilk kullanımda CLI'nın kendi hatası görünür; `--model` ya da `chat.defaultModel` bunu geçersiz kılar. `--context` bilmeyen eski bir
+  CLI'ya context bayrağı verilmez (`doctor` `[--]` satırı gösterir).
+  VS Code'da (1.141'de denetlendi) reasoning effort ve context boyutu için ayar yoktur: bunlar sohbet model seçicisinden
+  seçilir. Varsayılan model (`chat.defaultModel`) ve izinler (`chat.defaultConfiguration`, `chat.permissions.default`)
+  gerçek ayarlardır. `orkestra copilot vscode` şunları yazdırır; `--apply --workspace PATH` ya da `--user` ile (zaman
+  damgalı yedek, idempotent, yorumlu dosyayı reddederek) yazar: `chat.defaultModel` (geçerli model),
+  `chat.defaultConfiguration` (`autopilot` + `allowAll`, yalnız allow-all açıkken), `chat.plugins.enabled`,
+  `chat.pluginLocations` ve yalnız `--permissions autoApprove|autopilot` ile `chat.permissions.default`.
+  `chat.pluginLocations` makine kapsamlıdır: çalışma alanı dosyası bunun için yok sayılır, bu yüzden `--workspace` ile
+  yazılmaz (komut bunu söyler); eklentiyi `--user` ile kaydet. `--model` ve `--workspace` ile ayrıca o modele (ve
+  `--effort`'a) sabitlenmiş `<project>/.github/agents/orkestra.agent.md` yazar (`--effort` için `--model` gerekir).
+  `--remove` her anahtarı yalnız hâlâ Orkestra'nın yazdığı değeri taşıyorsa geri alır.
 
 | Platform | Destek |
 | --- | --- |
@@ -394,6 +413,7 @@ Genel ayarlar `~/.orkestra/config.json` içindedir (klasör `ORKESTRA_HOME` ile 
 | `lang` | `auto` | İnsana giden metnin dili: `auto`, `en` ya da `tr`. |
 | `guards.<ad>` | `true` | Dokuz guard'dan birini kapatır. `guards.test_syntax` isteğe bağlıdır ve kapalıdır. |
 | `engine.default` | `claude` | Açık seçim yapılmadan başlayan run'ların motoru (`claude`, `cursor`, `copilot`). |
+| `engine.copilot.model` / `.reasoning_effort` / `.context` / `.allow_all` | `gpt-6-luna` / `max` / `long_context` / `true` | Her run için Copilot CLI varsayılanları (model serbest metin ya da `auto`; efor `none`..`max`; context `default` ya da `long_context`). |
 | `watchdog.auto_resume` | `headless` | `off`, `headless` ya da `all`; `max_auto_resumes` 3'tür. |
 | `tempo.task_review_required` | `true` | M ve L run'larda `task done` o turun PASS review'unu ister. |
 | `tempo.max_dispatches` | `3` | Aynı ajan aynı görev için yeni kanıt olmadan bu kadar başlatılırsa `orkestra next` `escalate` cevabı verir. |
