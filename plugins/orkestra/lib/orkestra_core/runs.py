@@ -275,9 +275,13 @@ def usage_snapshot(project: Path, st: Dict[str, Any]) -> Optional[Dict[str, Any]
                         and Path(data.get("project", "")) == Path(project):
                     ids.append(f.stem)
         created = T._ts(st.get("created"))
-        u = U.for_sessions(ids, since=created - 120 if created else None) if ids else None
+        u = U.for_sessions(ids, since=created - 120 if created else None,
+                           windows=T.phase_windows(st)) if ids else None
         if u:
-            u = {k: u.get(k) for k in ("input", "output", "cache_write", "cache_read", "total", "messages", "context")}
+            kept = {k: u.get(k) for k in ("input", "output", "cache_write", "cache_read", "total", "messages", "context")}
+            if isinstance(u.get("phases"), dict):
+                kept["phases"] = {str(k): int(v) for k, v in u["phases"].items() if isinstance(v, int)}
+            u = kept
             u["at"] = now_iso()
         return u
     except Exception:
@@ -483,13 +487,19 @@ def _precheck(project: Path, run_id: str) -> Optional[Dict[str, Any]]:
 
 
 def write_timing(project: Path, st: Dict[str, Any]) -> None:
-    """The clocks of a finished run, in the feature folder. The run is already done; the caller ignores a failure."""
+    """The clocks of a finished run, in the feature folder. The run is already done; the caller ignores a failure.
+    A phase gets a token mark only when a bound session's transcript dated a reply inside that phase."""
     tm = T.timings(st)
-    lines = ["# Timing", "", "- " + i18n.t("monitor.ui_clock_total", total=T.clock(tm["run"]))]
+    measured = usage_snapshot(project, st) or {}
+    counted = measured.get("phases") if isinstance(measured.get("phases"), dict) else {}
+    total_tokens = measured.get("total") if "total" in measured else None
+    lines = ["# Timing", "", "- " + i18n.t(
+        "monitor.ui_clock_total", total=T.compact_dur(tm["run"]) + T.token_mark(total_tokens))]
     for name in PHASES:
         if name not in tm["phases"]:
             continue
-        lines.append(f"- {i18n.t('monitor.phase_' + name)}: {T.clock(int(tm['phases'][name]))}")
+        tokens = counted.get(name) if name in counted else None
+        lines.append("- " + T.stage_text(i18n.t("monitor.phase_" + name), int(tm["phases"][name]), tokens))
     write_text_atomic(paths.feature_dir(project, st["run_id"]) / "timing.md", "\n".join(lines) + "\n")
 
 

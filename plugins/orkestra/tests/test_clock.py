@@ -1,4 +1,4 @@
-"""H:MM:SS clocks on the watch row and the dashboard phase line."""
+"""Stage lines on the watch row, the dashboard, and timing.md: `discovery: 3m (10k)`."""
 from __future__ import annotations
 
 import unittest
@@ -25,6 +25,18 @@ class TestClock(unittest.TestCase):
         self.assertEqual(T.clock(90000), "25:00:00")
         self.assertEqual(T.clock(None), "?")
         self.assertEqual(T.clock(-4), "0:00:00")
+
+    def test_a_stage_reads_as_minutes_and_measured_thousands(self):
+        self.assertEqual(T.token_mark(None), "")
+        self.assertEqual(T.token_mark(0), " (0)")
+        self.assertEqual(T.token_mark(842), " (842)")
+        self.assertEqual(T.token_mark(10_000), " (10k)")
+        self.assertEqual(T.token_mark(10_400), " (10.4k)")
+        self.assertEqual(T.token_mark(1_200_000), " (1.2m)")
+        with lang("tr"):
+            self.assertEqual(T.stage_text("keşif", 180, 10_000), "keşif: 3 dk (10k)")
+        with lang("en"):
+            self.assertEqual(T.stage_text("discovery", 180, None), "discovery: 3m")
 
     def test_a_phase_visited_twice_is_summed(self):
         st = {"created": "2026-10-18T00:00:00+00:00", "updated": "2026-10-18T02:00:00+00:00", "status": "done",
@@ -61,13 +73,14 @@ class TestWatchClock(unittest.TestCase):
 
     def test_english_row_is_a_clock_and_the_pace_row_stays(self):
         text = self.text("en")
-        self.assertIn("Total 1:56:40 · intake 0:02:00 · implementation 1:54:40", text)
+        self.assertIn("Total 1h 56m · intake: 2m · implementation: 1h 54m", text)
         self.assertIn("total 1h 56m", text)
-        self.assertLess(text.index("intake 0:02:00"), text.index("implementation 1:54:40"))
+        self.assertLess(text.index("intake: 2m"), text.index("implementation: 1h 54m"))
+        self.assertNotIn("0:02:00", text)
 
     def test_turkish_row_uses_phase_names(self):
         text = self.text("tr")
-        self.assertIn("Toplam 1:56:40 · giriş 0:02:00 · uygulama 1:54:40", text)
+        self.assertIn("Toplam 1 sa 56 dk · giriş: 2 dk · uygulama: 1 sa 54 dk", text)
         self.assertIn("toplam 1 sa 56 dk", text)
 
     def test_a_run_with_no_time_omits_the_row(self):
@@ -77,7 +90,7 @@ class TestWatchClock(unittest.TestCase):
 
     def test_a_finished_run_keeps_the_clocks(self):
         text = self.text("en", status="done", phase="done", phase_index=9)
-        self.assertIn("Total 1:56:40", text)
+        self.assertIn("Total 1h 56m", text)
 
 
 class TestDashboardClock(PageCase):
@@ -92,27 +105,27 @@ class TestDashboardClock(PageCase):
                  timing={"run": 7000, "phases": {"intake": 120, "implement": 6880}},
                  phase_history=[{"phase": "intake", "seconds": 120}, {"phase": "implement", "seconds": 6880}])
         before = self.line(v)
-        self.assertIn("Total 1:56:40", before)
-        self.assertIn("intake 0:02:00", before)
-        self.assertIn("implementation 1:54:40", before)
-        after = self.line(v, [{"op": "advance", "ms": 5000}])
-        self.assertIn("Total 1:56:45", after)
-        self.assertIn("implementation 1:54:45", after)
-        self.assertIn("intake 0:02:00", after)
+        self.assertIn("Total 1h 56m", before)
+        self.assertIn("intake: 2m", before)
+        self.assertIn("implementation: 1h 54m", before)
+        after = self.line(v, [{"op": "advance", "ms": 60000}])
+        self.assertIn("Total 1h 57m", after)
+        self.assertIn("implementation: 1h 55m", after)
+        self.assertIn("intake: 2m", after)
 
     def test_a_finished_run_stays_frozen(self):
         v = view(1, "done", "done", status="done", phase="done", phase_index=9,
                  timing={"run": 7000, "phases": {"intake": 7000}},
                  phase_history=[{"phase": "intake", "seconds": 7000}])
         after = self.line(v, [EXPAND, {"op": "advance", "ms": 5000}])
-        self.assertIn("Total 1:56:40", after)
-        self.assertNotIn("1:56:45", after)
+        self.assertIn("Total 1h 56m", after)
+        self.assertNotIn("1h 57m", after)
 
     def test_turkish_dashboard_names(self):
         v = view(1, "running", "working", timing={"run": 90, "phases": {}}, phase_history=[])
         out = self.run_page([v], [ev("return H.find(H.byId('main'),x=>x.className==='clk')[0].textContent", "r")],
                             code="tr")
-        self.assertIn("Toplam 0:01:30", out["results"]["r"])
+        self.assertIn("Toplam 1 dk", out["results"]["r"])
 
 
 def _closed(project):
@@ -135,9 +148,10 @@ class TestTimingFile(helpers.Sandbox):
         with lang("en"):
             runs.write_timing(proj, _closed(proj))
         text = (proj / ".orkestra" / "features" / "r1" / "timing.md").read_text(encoding="utf-8")
-        self.assertIn("Total 2:00:00", text)
-        self.assertIn("intake: 1:00:00", text)
-        self.assertIn("delivery: 1:00:00", text)
+        self.assertIn("Total 2h", text)
+        self.assertIn("intake: 1h", text)
+        self.assertIn("delivery: 1h", text)
+        self.assertNotIn("(", text)
         self.assertNotIn("done:", text)
 
     def test_phase_next_writes_the_file_and_a_failed_write_still_finishes(self):

@@ -164,7 +164,8 @@ def _refresh(path: str, is_main: bool) -> Optional[_File]:
     return fs
 
 
-def _collect(sids: List[str], since: Optional[float]) -> Optional[Dict[str, Any]]:
+def _collect(sids: List[str], since: Optional[float],
+             windows: Optional[List[Tuple[str, float, float]]] = None) -> Optional[Dict[str, Any]]:
     merged: Dict[str, Entry] = {}
     seen = set()
     ctx, ctx_ts = 0, -1.0
@@ -185,15 +186,33 @@ def _collect(sids: List[str], since: Optional[float]) -> Optional[Dict[str, Any]
     if not seen:
         return None
     tin = tout = cw = cr = n = 0
+    phases: Dict[str, int] = {}
+    spans = []
+    for name, start, end in windows or []:
+        try:
+            spans.append((str(name), float(start), float(end)))
+        except (TypeError, ValueError):
+            continue
     for ts, a, b, c, d in merged.values():
         if not (a or b or c or d) or (since is not None and ts is not None and ts < since):
             continue
         tin, tout, cw, cr, n = tin + a, tout + b, cw + c, cr + d, n + 1
-    return {"input": tin, "output": tout, "cache_write": cw, "cache_read": cr, "total": tin + tout + cw + cr,
-            "messages": n, "context": ctx or None, "files": len(seen)}
+        if ts is None:
+            continue
+        bit = a + b + c + d
+        for name, start, end in spans:
+            if start <= ts < end:
+                phases[name] = phases.get(name, 0) + bit
+                break
+    out = {"input": tin, "output": tout, "cache_write": cw, "cache_read": cr, "total": tin + tout + cw + cr,
+           "messages": n, "context": ctx or None, "files": len(seen)}
+    if windows is not None:
+        out["phases"] = phases
+    return out
 
 
-def for_sessions(session_ids: Iterable[str], since: Optional[float] = None) -> Optional[Dict[str, Any]]:
+def for_sessions(session_ids: Iterable[str], since: Optional[float] = None,
+                 windows: Optional[List[Tuple[str, float, float]]] = None) -> Optional[Dict[str, Any]]:
     """Summed token usage of the given sessions and their subagents, counted from `since` (epoch seconds) on.
 
     Returns None when no transcript is found. `context` is the size of the latest main-conversation request
@@ -201,6 +220,6 @@ def for_sessions(session_ids: Iterable[str], since: Optional[float] = None) -> O
     """
     try:
         with _LOCK:
-            return _collect([s for s in session_ids if isinstance(s, str) and _SID_RE.match(s)], since)
+            return _collect([s for s in session_ids if isinstance(s, str) and _SID_RE.match(s)], since, windows)
     except Exception:                      # a transcript quirk must never break watch / dashboard
         return None

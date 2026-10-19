@@ -76,6 +76,17 @@ class UsageReader(_ClaudeDir, helpers.Sandbox):
         u = U.for_sessions(["sess-1"])
         self.assertEqual((u["output"], u["messages"]), (90, 6))
 
+    def test_a_reply_is_counted_in_the_phase_it_was_written(self):
+        start = _dt.datetime(2026, 10, 4, 10, 0, tzinfo=_dt.timezone.utc).timestamp()
+        (self.pdir / "sess-1.jsonl").write_text(
+            rec("d1", 10, ts="2026-10-04T10:01:00.000Z") + "\n"
+            + rec("p1", 20, ts="2026-10-04T10:05:00.000Z") + "\n", encoding="utf-8")
+        windows = [("discover", start, start + 180), ("plan", start + 180, start + 600)]
+        u = U.for_sessions(["sess-1"], windows=windows)
+        self.assertEqual(u["phases"]["discover"], 10 + 100 + 1000 + 10)
+        self.assertEqual(u["phases"]["plan"], 10 + 100 + 1000 + 20)
+        self.assertNotIn("implement", u["phases"])
+
     def test_since_counts_only_the_run(self):
         (self.pdir / "sess-1.jsonl").write_text(rec("early", 100, ts="2026-10-04T09:00:00.000Z") + "\n"
                                                 + rec("late", 7, ts="2026-10-04T11:00:00.000Z") + "\n")

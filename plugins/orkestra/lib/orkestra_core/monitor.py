@@ -514,21 +514,8 @@ _TURN_LEFT = ("dispatch.turn_done", "dispatch.turn_status", "dispatch.turn_off_t
 
 
 def _hum(sec: Optional[float]) -> str:
-    """Compact duration for the page's sentences (monitor-local; `i18n.duration` stays as the CLI prints it): seconds
-    below one minute, whole minutes below an hour, then `2h` / `2h 5m`, and days from 24 hours (`2d 3h`). A trailing
-    zero unit is not printed ("2h", never "2h 0m"); `?` when unknown."""
-    if sec is None:
-        return "?"
-    s = int(max(0, sec))
-    if s < 60:
-        return i18n.t("tempo.dur_s", n=s)
-    if s < 3600:
-        return i18n.t("tempo.dur_m", n=s // 60)
-    h, m = s // 3600, s % 3600 // 60
-    if h < 24:
-        return i18n.t("tempo.dur_hm", h=h, m=m) if m else i18n.t("monitor.dur_h", h=h)
-    d, h = h // 24, h % 24
-    return i18n.t("monitor.dur_dh", d=d, h=h) if h else i18n.t("monitor.dur_d", d=d)
+    """Compact duration for the page's sentences. Same words as `tempo.compact_dur`."""
+    return T.compact_dur(sec)
 
 
 def _hago(sec: Optional[float]) -> str:
@@ -1016,7 +1003,8 @@ def collect(project: Path, st: Dict[str, Any], mtime: float = 0.0, n_activity: i
     state_updated = _parse_iso(st.get("updated")) or mtime
     sessions = _sessions_for(project, rid)
     created = _parse_iso(st.get("created", ""))
-    usage = U.for_sessions([s["id"] for s in sessions], since=created - 120 if created else None)
+    usage = U.for_sessions([s["id"] for s in sessions], since=created - 120 if created else None,
+                           windows=T.phase_windows(st, now))
     if not usage and isinstance(st.get("usage"), dict):
         usage = dict(st["usage"], final=True)       # closed run: the numbers saved when it finished
     wd = T.wd_cfg()
@@ -1147,13 +1135,15 @@ def _tok(n: Any) -> str:
 
 
 def _clock_body(v: Dict[str, Any]) -> str:
-    """Total and per-phase `H:MM:SS` for the watch row. Empty when the run has no elapsed time and no phase seconds."""
+    """Total and each phase as `discovery: 3m (10k)`. The token mark is omitted when that phase was not measured."""
     tmg = v.get("timing") or {}
     try:
         run = int(tmg.get("run") or 0)
     except (TypeError, ValueError):
         run = 0
     phases = tmg.get("phases") if isinstance(tmg.get("phases"), dict) else {}
+    usage = v.get("usage") if isinstance(v.get("usage"), dict) else {}
+    counted = usage.get("phases") if isinstance(usage.get("phases"), dict) else {}
     parts = []
     for name in PHASES:
         if name not in phases:
@@ -1162,10 +1152,12 @@ def _clock_body(v: Dict[str, Any]) -> str:
             seconds = int(phases[name])
         except (TypeError, ValueError):
             continue
-        parts.append(f"{i18n.t('monitor.phase_' + name)} {T.clock(seconds)}")
+        tokens = counted.get(name) if name in counted else None
+        parts.append(T.stage_text(i18n.t("monitor.phase_" + name), seconds, tokens))
     if run <= 0 and not parts:
         return ""
-    total = T.clock(run)
+    total_tokens = usage.get("total") if "total" in usage else None
+    total = T.compact_dur(run) + T.token_mark(total_tokens)
     if parts:
         return i18n.t("monitor.ui_clock", total=total, phases=" · ".join(parts))
     return i18n.t("monitor.ui_clock_total", total=total)
@@ -1602,17 +1594,30 @@ function show(n,on){if(n.hidden!==!on)n.hidden=!on;}
 function lsGet(k){try{return localStorage.getItem(k);}catch(e){return null;}}
 function lsSet(k,v){try{localStorage.setItem(k,v);}catch(e){}}
 function tk(n){n=n||0;return n<1000?String(n):n<1e6?(n/1e3).toFixed(1)+"K":(n/1e6).toFixed(2)+"M";}
-function hms(s){s=Math.max(0,s|0);return Math.floor(s/3600)+":"+pad(Math.floor(s%3600/60))+":"+pad(s%60);}
+function compactDur(s){s=Math.max(0,s|0);
+ if(s<60)return fmt(L.dur_s,{n:s});
+ if(s<3600)return fmt(L.dur_m,{n:Math.floor(s/60)});
+ let h=Math.floor(s/3600),m=Math.floor(s%3600/60);
+ if(h<24)return m?fmt(L.dur_hm,{h:h,m:m}):fmt(L.dur_h,{h:h});
+ const d=Math.floor(h/24);h=h%24;return h?fmt(L.dur_dh,{d:d,h:h}):fmt(L.dur_d,{d:d});}
+function tokMark(n){if(n===null||n===undefined||n==="")return "";n=Math.max(0,n|0);
+ if(n<1000)return " ("+n+")";
+ if(n<1000000){var whole=Math.floor(n/1000),tenth=Math.floor((n%1000+50)/100);if(tenth===10){whole++;tenth=0;}
+  return tenth?" ("+whole+"."+tenth+"k)":" ("+whole+"k)";}
+ var whole=Math.floor(n/1000000),tenth=Math.floor((n%1000000+50000)/100000);if(tenth===10){whole++;tenth=0;}
+ return tenth?" ("+whole+"."+tenth+"m)":" ("+whole+"m)";}
 function clockLine(v){
  const spent={};
  (v.phase_history||[]).forEach(h=>{if(h&&h.phase)spent[h.phase]=(spent[h.phase]||0)+(h.seconds||0);});
  const open=v.status!=="done"&&v.status!=="aborted";
  const extra=open&&v.now?Math.max(0,Math.floor(nowS()-v.now)):0;
+ const ph=(v.usage&&v.usage.phases)||{};
  const parts=[];
- PH.forEach(p=>{if(spent[p]==null)return;parts.push(L["phase_"+p]+" "+hms(spent[p]+(p===v.phase?extra:0)));});
+ PH.forEach(p=>{if(spent[p]==null)return;
+  parts.push(L["phase_"+p]+": "+compactDur(spent[p]+(p===v.phase?extra:0))+(Object.prototype.hasOwnProperty.call(ph,p)?tokMark(ph[p]):""));});
  const base=(v.timing&&v.timing.run)|0;
  if(!base&&!parts.length)return "";
- const total=hms(base+extra);
+ const total=compactDur(base+extra)+((v.usage&&v.usage.total!==undefined&&v.usage.total!==null)?tokMark(v.usage.total):"");
  return parts.length?fmt(L.ui_clock,{total:total,phases:parts.join(" \u00b7 ")}):fmt(L.ui_clock_total,{total:total});}
 function dur(s){s=Math.max(0,s|0);if(s<60)return fmt(L.dur_s,{n:s});if(s<3600)return fmt(L.dur_m,{n:Math.floor(s/60)});
  let h=Math.floor(s/3600);const m=Math.floor(s%3600/60);

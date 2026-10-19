@@ -59,6 +59,50 @@ def dur(seconds: Optional[float]) -> str:
     return f"{s // 3600}h{s % 3600 // 60:02d}m"
 
 
+def compact_dur(seconds: Optional[float]) -> str:
+    """The short duration a person reads: `45s` / `45 sn`, `3m` / `3 dk`, `2h` / `2 sa`, `2h 5m` / `2 sa 5 dk`.
+    A zero unit is left off, so an hour is not written as `1h 0m`."""
+    if seconds is None:
+        return "?"
+    s = int(max(0, seconds))
+    if s < 60:
+        return i18n.t("tempo.dur_s", n=s)
+    if s < 3600:
+        return i18n.t("tempo.dur_m", n=s // 60)
+    h, m = s // 3600, s % 3600 // 60
+    if h < 24:
+        return i18n.t("tempo.dur_hm", h=h, m=m) if m else i18n.t("monitor.dur_h", h=h)
+    d, h = h // 24, h % 24
+    return i18n.t("monitor.dur_dh", d=d, h=h) if h else i18n.t("monitor.dur_d", d=d)
+
+
+def token_mark(n: Optional[int]) -> str:
+    """` (10k)` / ` (1.5k)` / ` (1.2m)` / ` (842)`. Empty when the number was not measured."""
+    if n is None:
+        return ""
+    n = int(n)
+    if n < 0:
+        n = 0
+    if n < 1000:
+        return f" ({n})"
+    if n < 1_000_000:
+        whole, frac = divmod(n, 1000)
+        tenth = (frac + 50) // 100
+        if tenth == 10:
+            whole, tenth = whole + 1, 0
+        return f" ({whole}k)" if tenth == 0 else f" ({whole}.{tenth}k)"
+    whole, frac = divmod(n, 1_000_000)
+    tenth = (frac + 50_000) // 100_000
+    if tenth == 10:
+        whole, tenth = whole + 1, 0
+    return f" ({whole}m)" if tenth == 0 else f" ({whole}.{tenth}m)"
+
+
+def stage_text(label: str, seconds: Optional[float], tokens: Optional[int] = None) -> str:
+    """`discovery: 3m (10k)`. The token mark is omitted when that phase has no measured usage."""
+    return f"{label}: {compact_dur(seconds)}{token_mark(tokens)}"
+
+
 def clock(seconds: Optional[float]) -> str:
     """Hours:minutes:seconds for a person watching a run. Minutes and seconds are two digits. Hours are not padded
     and keep growing past 24, so a long run does not lose a day."""
@@ -724,6 +768,20 @@ def timings(st: Dict[str, Any], now: Optional[float] = None) -> Dict[str, Any]:
             "task_avg": (phases.get("implement", 0.0) / len(done)) if done and phases.get("implement") else None,
             "task_last_round_median": sorted(durs)[len(durs) // 2] if durs else None,
             "tasks_reopened": len(reopened), "reopens": sum(reopen_count(t) for t in tasks.values())}
+
+
+def phase_windows(st: Dict[str, Any], now: Optional[float] = None) -> List[Tuple[str, float, float]]:
+    """Half-open `[start, end)` intervals for each entered phase, in the same order `timings` sums."""
+    now = time.time() if now is None else now
+    hist = [(h.get("to"), _ts(h.get("at"))) for h in (st.get("history") or []) if _ts(h.get("at"))]
+    closed = st.get("status") in ("done", "aborted")
+    end = (_ts(st.get("updated")) or now) if closed else now
+    out: List[Tuple[str, float, float]] = []
+    for i, (name, at) in enumerate(hist):
+        nxt = hist[i + 1][1] if i + 1 < len(hist) else end
+        if name and name != "done" and at is not None and nxt is not None:
+            out.append((str(name), float(at), float(nxt)))
+    return out
 
 
 def overlap(tasks: Dict[str, Any], tid: str, others: List[str]) -> List[Tuple[str, List[str]]]:
