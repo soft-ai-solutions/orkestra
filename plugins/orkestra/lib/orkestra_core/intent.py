@@ -435,9 +435,20 @@ _RISK_FLOOR_M = _LazyRe(
     r"\b(auth(?:entication|orization)?|oauth|payment|billing|stripe|revenuecat|"
     r"deploy|store\s+submit|testflight|play\s+console|schema\s+change|"
     r"security|kvkk|gdpr|credential|secret|encryption|rls|"
-    r"permission|pci|hipaa)\b",
+    r"permission|pci|hipaa|"
+    r"odeme|ödeme|giris\s+(yap|ekle|ekran|sistem)|giriş\s+(yap|ekle|ekran|sistem)|"
+    r"sifre\w*|şifre\w*|parola\w*|yetki\w*|fatura\w*|abonelik\w*|"
+    r"sema|şema|kimlik|webhook|password|"
+    r"drop\s+table|drop\s+column|truncate)\b",
     re.I,
 )
+# A real change, not a question and not a typo fix. "yazım" does not match "yaz".
+_CHANGE = _LazyRe(
+    r"\b(add|ekle|implement|migrate|deploy|delete|remove|kaldir|kaldır|sil|"
+    r"olustur|oluştur|kur|bagla|bağla|enable|disable)\b",
+    re.I,
+)
+_RANK = {"XS": 0, "S": 1, "M": 2, "L": 3}
 _XS_SIZE = _LazyRe(
     r"\b(typo|yazım\s*hatası|rename|yeniden\s*adlandır|one[- ]line|tek\s*satır|"
     r"trivial|çok\s*basit|çok\s*küçük|minik|nit\b|cosmetic|"
@@ -471,14 +482,54 @@ _ADVISORY = _LazyRe(
 )
 
 
+def _pure_question(text: str, low: str) -> bool:
+    """Explain or Q&A with no change verb. A risky noun in the question does not make it a build."""
+    return bool(_ADVISORY.search(text)) and not _CHANGE.search(low)
+
+
 def is_advisory_request(request: str) -> bool:
     """True when the ask is explain/Q&A/read-only: track on the dashboard, do not invent a product change."""
     text = (request or "").strip()
     if not text:
         return False
-    if _RISK_FLOOR_M.search(norm_lower(text)) or _L_SIZE.search(norm_lower(text)) or _M_SIZE.search(norm_lower(text)):
+    low = norm_lower(text)
+    if _L_SIZE.search(low) or _CHANGE.search(low):
         return False
-    return bool(_ADVISORY.search(text))
+    return _pure_question(text, low)
+
+
+def size_floor(request: str) -> str:
+    """Smallest size this request may use. A risky change cannot sit below M. A question or a typo can stay XS."""
+    text = (request or "").strip()
+    if not text:
+        return "XS"
+    low = norm_lower(text)
+    if _pure_question(text, low):
+        return "XS"
+    if _L_SIZE.search(low):
+        return "L"
+    if _RISK_FLOOR_M.search(low) and not _XS_SIZE.search(low):
+        return "M"
+    return "XS"
+
+
+def clamp_size(size: str, request: str) -> str:
+    """Raise a chosen size up to the floor. Never lower it."""
+    floor = size_floor(request)
+    if _RANK.get(size, _RANK["M"]) < _RANK[floor]:
+        return floor
+    return size if size in _RANK else "M"
+
+
+def resolve_size(requested: str, request: str) -> str:
+    """`--size` may go smaller on a safe request. It cannot undercut a risk, or inflate a typo or a question."""
+    inferred = infer_size(request)
+    if not requested or requested == "auto":
+        return inferred
+    chosen = clamp_size(requested, request)
+    if _RANK[inferred] <= _RANK["S"] and _RANK[chosen] > _RANK[inferred] and size_floor(request) == "XS":
+        return inferred
+    return chosen
 
 
 def title_from_request(request: str, max_words: int = 6) -> str:
@@ -504,24 +555,12 @@ def min_context_chars(size: str) -> int:
     return 80 if (size or "") == "XS" else 200
 
 
-def infer_size(request: str) -> str:
-    """Pick XS/S/M/L from the user's request text. Prefer smaller when clearly safe; floor at M on risk.
-
-    Explicit `--size` / `boyut: S` in the text wins. A feature or a risk stays M/L.
-    A long small-fix note, and writing or general work without those signals, stays on the fast track.
-    Unclear text still stays M.
-    """
-    text = (request or "").strip()
-    if not text:
-        return "M"
-    m = _EXPLICIT_SIZE.search(text)
-    if m:
-        return (m.group(1) or m.group(2) or "M").upper()
-    low = norm_lower(text)
-    n = len(low)
+def _base_size(text: str, low: str, n: int) -> str:
+    if _pure_question(text, low) and n < 400:
+        return "XS"
     if _L_SIZE.search(low):
         return "L"
-    if _RISK_FLOOR_M.search(low):
+    if _RISK_FLOOR_M.search(low) and not _XS_SIZE.search(low):
         return "M"
     if is_advisory_request(text) and n < 400:
         return "XS"
@@ -538,6 +577,30 @@ def infer_size(request: str) -> str:
     if n < 140:
         return "S"
     return "M"
+
+
+def infer_size(request: str) -> str:
+    """Pick XS/S/M/L from the user's request text. Prefer smaller when clearly safe; floor at M on risk.
+
+    Explicit `boyut: S` in the text wins only when it stays above the risk floor
+    and does not inflate a typo or a question. A feature or a risk stays M/L.
+    A long small-fix note, and writing or general work without those signals, stays on the fast track.
+    Unclear text still stays M.
+    """
+    text = (request or "").strip()
+    if not text:
+        return "M"
+    low = norm_lower(text)
+    base = _base_size(text, low, len(low))
+    m = _EXPLICIT_SIZE.search(text)
+    if not m:
+        return base
+    chosen = clamp_size((m.group(1) or m.group(2) or "M").upper(), text)
+    if _RANK[base] <= _RANK["S"] and _RANK[chosen] > _RANK[base] and size_floor(text) == "XS":
+        return base
+    if _RANK[chosen] < _RANK[base]:
+        return base
+    return chosen
 
 
 _CONTINUE_INTENT = _LazyRe(

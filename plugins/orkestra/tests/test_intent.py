@@ -2,7 +2,8 @@ import unittest
 
 import helpers  # noqa: F401
 from orkestra_core.intent import (approval, git_grants, infer_size, is_advisory_request, manual_approval_requested,
-                                  min_context_chars, off_topic_vs_project, skips_adversary, skips_plan_critic,
+                                  min_context_chars, off_topic_vs_project, resolve_size, skips_adversary,
+                                  skips_plan_critic,
                                   approval_answer, title_from_request)
 
 GRANT_CASES = {
@@ -193,6 +194,14 @@ SIZE_CASES = {
     "tüm uygulamayı migrate et": "L",
     "bulk multi-platform refactor": "L",
     "size: L rewrite the whole module": "L",
+    "ödeme entegrasyonu ekle": "M",
+    "giriş şifresi sıfırlama ekle": "M",
+    "oauth nasıl çalışır?": "XS",
+    "explain how payments work": "XS",
+    "bu endpoint nasıl çalışır?": "XS",
+    "boyut: S add oauth login": "M",
+    "boyut: L typo düzelt README": "XS",
+    "typo düzelt payment label": "XS",
 }
 
 
@@ -236,6 +245,14 @@ class TestInferSize(unittest.TestCase):
         self.assertTrue(is_advisory_request("bu dosya ne işe yarar?"))
         self.assertFalse(is_advisory_request("dark mode özelliği ekle"))
         self.assertFalse(is_advisory_request("add oauth login"))
+        self.assertTrue(is_advisory_request("explain how payments work"))
+
+    def test_a_flag_cannot_shrink_a_risk_or_inflate_a_typo(self):
+        self.assertEqual(resolve_size("S", "add oauth login"), "M")
+        self.assertEqual(resolve_size("L", "typo düzelt README"), "XS")
+        self.assertEqual(resolve_size("S", "sub fonksiyonu ekle"), "S")
+        self.assertEqual(resolve_size("XS", "sub fonksiyonu ekle"), "XS")
+        self.assertEqual(resolve_size("auto", "küçük bugfix: null check"), "S")
         self.assertEqual(title_from_request("explain how the dashboard tracks open runs please"),
                          "explain how the dashboard tracks open")
         self.assertEqual(title_from_request(""), "request")

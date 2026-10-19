@@ -8,7 +8,7 @@ Goal: understand the request precisely enough to scope discovery. Output: a `## 
    ## Classification
    - Type: feature | bugfix | refactor | perf | security | docs | infra | ui | advice | question | explore
      (`advice` / `question` / `explore` = no product code change expected; still a tracked run on the dashboard)
-   - Size: XS | S | M | L — prefer the size already set by `orkestra start` (auto-inferred). Bump **up** only when risk/scope is clearly larger; never inflate a typo/fix or an advisory ask into M. L → keep the full request in scope and order tasks by dependency; do not silently drop work. Full pipeline (scouts + critic + adversary) is for **M/L**; XS/S must stay on the fast track.
+   - Size: XS | S | M | L — prefer the size already set by `orkestra start` (auto-inferred). Bump **up** only when risk/scope is clearly larger; never inflate a typo/fix or an advisory ask into M. A payment, login, schema, secret, or deploy change stays at least M even if the request says it is small. L → keep the full request in scope and order tasks by dependency; do not silently drop work. Full pipeline (scouts + critic + adversary) is for **M/L**; XS/S must stay on the fast track.
    - Risk: low | medium | high  (data/migration, auth, payments, public API, store release → high)
    - Affected surfaces: <web / iOS / Android / wear / API / CLI / DB ...>
    - Uncertainties (first impression): <bullets — candidates for clarify>

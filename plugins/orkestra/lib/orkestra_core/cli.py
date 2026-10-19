@@ -471,7 +471,7 @@ def cmd_start(a: argparse.Namespace) -> int:
     if approval_mode not in ("autopilot", "manual"):
         raise OrkestraError("ORKESTRA_APPROVAL_MODE must be autopilot or manual")
     size_arg = getattr(a, "size", "auto") or "auto"
-    size = intent.infer_size(request) if size_arg == "auto" else size_arg
+    size = intent.resolve_size(size_arg, request)
     if size not in intent.SIZES:
         raise OrkestraError(f"invalid size {size!r}")
     _require_project_config(project)
@@ -480,7 +480,17 @@ def cmd_start(a: argparse.Namespace) -> int:
     rid = st["run_id"]
     kept = _bind_here(project, rid)
     _out(f"run started: {rid} in {project}" + ("" if engine == "claude" else f" (engine: {engine})"))
-    _out(f"size: {size}" + (" (inferred from request; override with --size XS|S|M|L)" if size_arg == "auto" else ""))
+    if size_arg == "auto":
+        size_note = " (inferred from request; override with --size XS|S|M|L)"
+    elif size != size_arg:
+        order = ("XS", "S", "M", "L")
+        if order.index(size) > order.index(size_arg):
+            size_note = f" (raised from --size {size_arg}: the request is a risky change)"
+        else:
+            size_note = f" (kept at {size}: a typo or a question does not grow to --size {size_arg})"
+    else:
+        size_note = ""
+    _out(f"size: {size}{size_note}")
     _out(f"baseline: git={st['baseline']['git']} head={str(st['baseline'].get('head'))[:12]} "
          f"uncommitted_files={st['baseline']['dirty_files']}")
     if st["baseline"]["dirty_files"]:

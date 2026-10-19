@@ -33,7 +33,7 @@ User request: $ARGUMENTS
    advisory ones. Follow `orkestra playbook resume` when the phase is already past intake; otherwise continue from intake.
 3. If memory is **NOT INITIALIZED** → run `orkestra playbook onboard` first (once per project, ~3 scout calls), then continue the open run (or start one if none exists yet).
 4. If there is **no** active run yet: `orkestra start -p <project> --title "<≤6 words>" --request "<the user's request verbatim>"` (default `--size auto` infers XS/S/M/L).
-   Override with `--size XS|S|M|L` only when the inference is wrong. Add `--approval-mode manual` only when the user explicitly wants the decision; otherwise the run is autopilot.
+   Override with `--size XS|S|M|L` only when the inference is wrong. The CLI will not let that flag shrink a risky change below M, or grow a typo or a question into M/L. Add `--approval-mode manual` only when the user explicitly wants the decision; otherwise the run is autopilot.
    **Every request must be a tracked run**: never answer only in chat without `orkestra start` (or a pre-opened run). Pure explanations and code reading are still runs (advisory, usually XS).
    **Size discipline:** XS ≈ one-file trivial/typo or advisory Q&A · S ≈ few clear files / small bug fix · M ≈ a real feature · L ≈ bulk / multi-capability.
    Prefer XS/S whenever the ask is clear and safe. Orkestra's full pipeline is for **M/L** (bulk/large) work.
