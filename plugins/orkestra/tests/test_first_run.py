@@ -270,8 +270,8 @@ class TestFirstSession(FreshMachine):
 
         # a project that was never initialised
         if marked:
-            self.refused("status", cwd=project, mention=("no open run", "orkestra start"))
-            self.refused("next", cwd=project, mention=("no open run", "orkestra start"))
+            self.refused("status", cwd=project, mention=("no run in", "orkestra run"))
+            self.refused("next", cwd=project, mention=("no run in", "orkestra run"))
             self.assertIn("NOT INITIALIZED", self.orc("context", cwd=project, expect=0).out)
         else:
             self.refused("status", cwd=project, mention=("not inside a project", "orkestra init -p ."))
@@ -337,7 +337,7 @@ class TestFirstSession(FreshMachine):
         self.assertIn("status active", self.orc("status", cwd=project, expect=0).out)
         aborted = self.orc("abort", "changed my mind", cwd=project, expect=0)
         self.assertIn("aborted", aborted.out)
-        self.refused("status", cwd=project, mention=("no open run",))
+        self.refused("status", cwd=project, mention=("no run in",))
         self.assertIn("status aborted", self.orc("status", "--run", rid, cwd=project, expect=0).out)
 
         # and a fresh run can follow on the same project
@@ -549,7 +549,7 @@ class TestEnvironmentProblems(FreshMachine):
             self.refused("init", cwd=project, mention=(str(project),))
             self.refused(*self.START, cwd=project, mention=(str(project),))
             self.assertIn("NOT INITIALIZED", self.orc("context", cwd=project, expect=0).out)
-            self.refused("status", cwd=project, mention=("no open run",))
+            self.refused("status", cwd=project, mention=("no run in",))
         finally:
             project.chmod(0o700)
 

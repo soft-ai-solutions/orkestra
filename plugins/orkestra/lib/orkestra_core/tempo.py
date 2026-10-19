@@ -670,6 +670,12 @@ def next_action(project: Path, st: Dict[str, Any], deep: bool = True, now: Optio
             act = _n("cli", f"gate REGRESSION → `orkestra phase back implement --reason \"<gate> regressed\" {p}`, fix the cause "
                             f"(never the test), then verify again", "the last `gate verify` is not green",
                      f"orkestra gate last {p}")
+        elif act is None and ver is None and st.get("size") in ("XS", "S"):
+            # XS/S: no separate verifier agent (phase-verify.md); the final reviewer stays mandatory
+            act = _n("work", f"{st.get('size')}: write verification.md yourself (no verifier agent): start from `orkestra template "
+                             f"verification`, cite `orkestra gate last {p}`, then run `orkestra trace check {p}` and "
+                             f"`orkestra integrity check {p}` and end with VERDICT: PASS",
+                     "gates are green; verification.md is missing", f"orkestra template verification {p}")
         elif act is None and ver is None:
             act = _phase_loop(project, st, "verify", ("verifier",), max_dispatches(), "orkestra:verifier", "verifier wrote no verification.md", p) \
                 or _n("dispatch", "dispatch orkestra:verifier (it writes verification.md)", "gates are green; verification.md is missing")
@@ -877,7 +883,7 @@ def tempo_line(project: Path, st: Dict[str, Any], now: Optional[float] = None,
 
 
 def report_lines(rid: str, st: Dict[str, Any], tm: Dict[str, Any], dw: Dict[str, Any], cls: Dict[str, Any],
-                 flag_lines: Optional[List[str]] = None) -> List[str]:
+                 flag_lines: Optional[List[str]] = None, card: Optional[Dict[str, Any]] = None) -> List[str]:
     """The human-readable lines of `orkestra tempo` (labels from the catalog; durations and figures as measured)."""
     t = i18n.t
     out = [t("tempo.cmd_head", rid=rid, status=st["status"], phase=st["phase"], total=dur(tm["run"])),
@@ -892,6 +898,12 @@ def report_lines(rid: str, st: Dict[str, Any], tm: Dict[str, Any], dw: Dict[str,
                      count=dw["count"], longest=dur(dw["longest"])))
     out.append(t("tempo.cmd_now", text=cls["text"]) + (t("tempo.cmd_now_since", dur=dur(cls["since"])) if cls.get("since") else ""))
     out.extend(t("tempo.cmd_flag", flag=f) for f in flag_lines or [])
+    if card:
+        from . import scorecard as SC        # late import: only `orkestra tempo` needs it
+        out.extend(SC.lines(card, t))
+        warn = SC.warning(card, t)
+        if warn:
+            out.append(warn)
     return out
 
 

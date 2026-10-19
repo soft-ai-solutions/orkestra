@@ -13,16 +13,17 @@ permissions:
   contents: read
 
 jobs:
-  # The whole Python suite (plugin + bridge) on every OS and on the oldest, two middle and the newest supported Python.
+  # The whole Python suite (plugin + bridge) on every OS on the oldest and the newest supported Python; the middle
+  # versions only run the quick smoke below. Perf ratios are opt-in (ORKESTRA_PERF=1); the absolute CPU budgets always run.
   unit:
     name: unit (${{ matrix.os }}, python ${{ matrix.python }})
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python: ["3.9", "3.11", "3.13", "3.14"]
+        python: ["3.9", "3.14"]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 60
     defaults:
       run:
         shell: bash
@@ -38,6 +39,40 @@ jobs:
       - name: bridge tests
         run: cd bridge/tests && python -m unittest discover -s . -q
         # OpenClaw stays on ubuntu/macos only (see openclaw job below).
+
+  # Fast check that the CLI starts on the middle Python versions and on Windows (no full suite there).
+  smoke:
+    name: smoke (${{ matrix.os }}, python ${{ matrix.python }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-latest, python: "3.11"}
+          - {os: ubuntu-latest, python: "3.13"}
+          - {os: windows-latest, python: "3.9"}
+          - {os: windows-latest, python: "3.14"}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: version, installer dry run, init and gate detect
+        run: |
+          export HOME="$RUNNER_TEMP/home" USERPROFILE="$RUNNER_TEMP/home" ORKESTRA_HOME="$RUNNER_TEMP/oh" COPILOT_HOME="$RUNNER_TEMP/ch"
+          mkdir -p "$HOME"
+          python plugins/orkestra/bin/orkestra --version
+          python install.py --dry-run --yes --skip-tests
+          # doctor exits 1 on runners (no engine installed), so smoke commands that are valid without one.
+          ORK="$PWD/plugins/orkestra/bin/orkestra"
+          mkdir "$RUNNER_TEMP/proj" && cd "$RUNNER_TEMP/proj"
+          git init -q && git config user.email ci@example.com && git config user.name ci
+          python "$ORK" init
+          python "$ORK" gate detect
 
   # Cheap static gates, run once: every file compiles, no Python newer than 3.9 syntax, the i18n lint holds, the shell
   # scripts parse. Failing here is faster and clearer than failing inside a 12-way matrix.

@@ -22,6 +22,7 @@ SECTIONS: Dict[str, Tuple[str, str]] = {
     "classification": ("Classification", "Sınıflandırma"),
     # spec.md
     "purpose": ("Purpose and value", "Amaç ve değer"),
+    "reproduction": ("Reproduction", "Yeniden üretim"),
     "scope": ("Scope", "Kapsam"),
     "in_scope": ("In scope", "Kapsam içi"),
     "out_of_scope": ("Out of scope", "Kapsam dışı"),
@@ -50,6 +51,7 @@ SECTIONS: Dict[str, Tuple[str, str]] = {
     "evidence": ("Evidence", "Kanıt"),
     "deviations": ("Deviations from the plan", "Plandan sapmalar"),
     "not_done": ("Not done / deferred", "Yapılmayanlar / ertelenenler"),
+    "autopilot_assumptions": ("Assumptions I made (autopilot)", "Yaptığım varsayımlar (otopilot)"),
     "how_to_try": ("How to try it", "Nasıl denersin"),
     "followups": ("Risks and follow-ups", "Riskler ve takip önerileri"),
     "commit_suggestion": ("Commit suggestion", "Commit önerisi"),
@@ -84,6 +86,8 @@ TASK_FIELD_ALIASES: Dict[str, Tuple[str, ...]] = {
 # `(new)` after a path in a task's file list: the task creates the file (no existence check). Prefixes, any language.
 NEW_FILE_MARKERS: Tuple[str, ...] = ("new", "create", "yeni", "oluştur")
 NEW_FILE_LABEL: Tuple[str, str] = ("new", "yeni")             # what the template of each language writes (english, turkish)
+# Given / When / Then words of an acceptance line, any language (compared with `ascii_fold`).
+GWT_WORDS: Tuple[str, ...] = ("given", "when", "then", "verilen", "eger", "ise", "oldugunda", "zaman")
 # triage.md: a `fix` row with one of these cells is closed.
 TRIAGE_DONE_WORDS: Tuple[str, ...] = ("done", "fixed", "tamam", "yapıldı")
 

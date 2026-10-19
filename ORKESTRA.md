@@ -1,4 +1,4 @@
-# Orkestra: summary (version 1.6.0, October 6, 2026)
+# Orkestra: summary (version 1.6.0, October 19, 2026)
 
 > Türkçe: [ORKESTRA.tr.md](ORKESTRA.tr.md) · This file is the canonical English reference; the Turkish one carries the same content.
 
@@ -7,9 +7,9 @@ the visual walkthrough in `docs/architecture.html`, contribution rules in `CONTR
 
 ## What it is
 
-Orkestra is a Claude Code plugin. It takes a development request through ten phases: intake, discovery, clarification,
+Orkestra is a plugin for Claude Code, Cursor and GitHub Copilot (and Pi). It takes a development request through ten phases: intake, discovery, clarification,
 plan, **your approval**, implementation, verification, review, delivery, done. The rules are not left to the model's
-goodwill: a command line tool (`orkestra`) keeps the phase order and the evidence, and Claude Code hooks check the
+goodwill: a command line tool (`orkestra`) keeps the phase order and the evidence, and host hooks check the
 prohibitions on every tool call.
 
 Source code cannot be written until you approve the plan. Every task is closed with evidence of a test that failed

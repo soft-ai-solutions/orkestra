@@ -35,8 +35,7 @@ English first, Türkçe aşağıda. The documents for users exist in both langua
 ## About these files
 
 - `architecture.html` (English) and `orkestra-mimari.html` (Turkish) are static pages with the same diagrams, tables
-  and facts, and a language switch link at the top of each. The copy of the Turkish page at the repository root
-  (`orkestra-mimari.html`) is kept identical to the one in this folder; only its link to the English page differs.
+  and facts, and a language switch link at the top of each. The Turkish page has a single copy, in this folder.
 - The pages describe the code at a point in time and say so (they carry the version and a date; the run statistics are
   dated 4-5 October 2026). When the code changes, update both languages together. `tests/test_docs_drift.py` checks
   that the two pages keep the same structure.

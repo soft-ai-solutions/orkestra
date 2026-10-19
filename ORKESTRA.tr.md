@@ -1,4 +1,4 @@
-# Orkestra — özet (sürüm 1.6.0, 6 Ekim 2026)
+# Orkestra: özet (sürüm 1.6.0, 19 Ekim 2026)
 
 > English: [ORKESTRA.md](ORKESTRA.md) · Bu dosya İngilizce kanonik başvurunun Türkçe karşılığıdır; içerik aynıdır.
 
@@ -7,9 +7,9 @@ görsel anlatım `docs/orkestra-mimari.html`'de, katkı kuralları `CONTRIBUTING
 
 ## Ne olduğu
 
-Orkestra bir Claude Code eklentisidir. Bir geliştirme isteğini on fazdan geçirir: giriş, keşif, netleştirme, plan,
+Orkestra, Claude Code, Cursor ve GitHub Copilot (ve Pi) için bir eklentidir. Bir geliştirme isteğini on fazdan geçirir: giriş, keşif, netleştirme, plan,
 **senin onayın**, uygulama, doğrulama, inceleme, teslim, bitti. Kurallar modelin iyi niyetine bırakılmaz: faz sırasını
-ve kanıtı bir komut satırı aracı (`orkestra`) tutar, yasakları Claude Code hook'ları her araç çağrısında denetler.
+ve kanıtı bir komut satırı aracı (`orkestra`) tutar, yasakları host hook'ları her araç çağrısında denetler.
 
 Planı sen onaylamadan kaynak koda yazılamaz. Her görev önce başarısız, sonra geçen test kanıtıyla kapanır. Run başında
 geçen her kontrol (test, lint, tip, build) sonda da geçmek zorundadır. Commit, push, deploy ve mağaza yüklemesi akışın

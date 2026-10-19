@@ -906,7 +906,13 @@ class TestWorkflow(unittest.TestCase):
 
     def test_matrix_covers_three_systems_and_four_pythons_without_fail_fast(self):
         self.assertRegex(self.text, r"os: \[ubuntu-latest, macos-latest, windows-latest\]")
-        self.assertRegex(self.text, r'python: \["3\.9", "3\.11", "3\.13", "3\.14"\]')
+        body = self.text.split("\njobs:\n", 1)[1]
+        unit = body.split("\n  smoke:\n", 1)[0]
+        smoke = body.split("\n  smoke:\n", 1)[1].split("\n  static:\n", 1)[0]
+        self.assertRegex(unit, r'python: \["3\.9", "3\.14"\]')
+        self.assertEqual(re.findall(r'\{os: ([\w-]+), python: "([\d.]+)"\}', smoke),
+                         [("ubuntu-latest", "3.11"), ("ubuntu-latest", "3.13"),
+                          ("windows-latest", "3.9"), ("windows-latest", "3.14")])
         self.assertGreaterEqual(self.text.count("fail-fast: false"), 4)
         self.assertNotIn("fail-fast: true", self.text)
 
@@ -915,14 +921,14 @@ class TestWorkflow(unittest.TestCase):
 
     def test_the_four_jobs_and_their_checks(self):
         jobs = re.findall(r"^  (\w+):\n", self.text.split("\njobs:\n", 1)[1], re.M)
-        self.assertEqual(jobs, ["unit", "static", "installer", "openclaw"])
+        self.assertEqual(jobs, ["unit", "smoke", "static", "installer", "openclaw"])
         for needle in ("plugins/orkestra/tests", "bridge/tests", "compileall", "feature_version=(3, 9)", "test_i18n",
                        "install.py --dry-run", "install.py --uninstall --dry-run", "install.sh --dry-run", "install.ps1 --dry-run",
                        "npm test", "bash -n install.sh", "run_hook.sh"):
             self.assertIn(needle, self.text)
 
     def test_every_job_has_a_timeout(self):
-        self.assertEqual(self.text.count("timeout-minutes:"), 4)
+        self.assertEqual(self.text.count("timeout-minutes:"), 5)
 
     def test_actions_are_pinned_to_a_major_version(self):
         for use in re.findall(r"uses: (\S+)", self.text):

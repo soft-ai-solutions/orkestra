@@ -794,7 +794,7 @@ class TestVersion(Base):
     def test_unknown_commands_are_usage_errors(self):
         cp = self.run_cli("verison")
         self.assertEqual(cp.returncode, 2)
-        self.assertIn("invalid choice", cp.stderr)
+        self.assertIn("Unknown command verison. Did you mean version?", cp.stderr)
 
 
 # ====================================================================== doctor
@@ -896,7 +896,7 @@ class TestParserErrorsFollowTheLanguage(unittest.TestCase):
     """argparse words its usage errors in English; in Turkish the `error:` line is translated, in English it is
     argparse's own sentence, character for character."""
 
-    BAD = (["phase", "bogus"], ["start"], ["nosuchcmd"], ["status", "--bogus"], ["start", "--title"], ["tdd", "red"],
+    BAD = (["phase", "bogus"], ["brief"], ["status", "--bogus"], ["start", "--title"], ["tdd", "red"],
            ["watch", "--interval", "fast"], ["lang", "de"], ["--lang", "de", "status"], ["status", "extra"])
 
     def stderr_of(self, parser_class, argv, code):
@@ -915,6 +915,15 @@ class TestParserErrorsFollowTheLanguage(unittest.TestCase):
             self.assertEqual(ours, plain, argv)
             self.assertIn("error:", ours)
 
+    def test_an_unknown_command_gets_the_unknown_command_error_in_both_languages(self):
+        en = self.stderr_of(CP.LocalizedParser, ["nosuchcmd"], "en")
+        self.assertIn("error: Unknown command nosuchcmd.", en)
+        self.assertNotIn("invalid choice", en)
+        tr = self.stderr_of(CP.LocalizedParser, ["nosuchcmd"], "tr")
+        self.assertIn("hata:", tr)
+        self.assertIn("nosuchcmd", tr)
+        self.assertNotIn("invalid choice", tr)
+
     def test_in_turkish_the_error_line_is_turkish_and_the_exit_code_is_the_same(self):
         for argv in self.BAD:
             text = self.stderr_of(CP.LocalizedParser, argv, "tr")
@@ -924,7 +933,7 @@ class TestParserErrorsFollowTheLanguage(unittest.TestCase):
                             "invalid float value", "unsupported"):
                 self.assertNotIn(english, text, argv)
         self.assertIn("geçersiz seçenek: 'bogus'", self.stderr_of(CP.LocalizedParser, ["phase", "bogus"], "tr"))
-        self.assertIn("şu argümanlar gerekli: --title", self.stderr_of(CP.LocalizedParser, ["start"], "tr"))
+        self.assertIn("şu argümanlar gerekli: task", self.stderr_of(CP.LocalizedParser, ["brief"], "tr"))
         self.assertIn("tanınmayan argümanlar: extra", self.stderr_of(CP.LocalizedParser, ["status", "extra"], "tr"))
         self.assertIn("bir değer bekliyor", self.stderr_of(CP.LocalizedParser, ["start", "--title"], "tr"))
         self.assertIn("geçersiz float değeri: 'fast'", self.stderr_of(CP.LocalizedParser, ["watch", "--interval", "fast"], "tr"))

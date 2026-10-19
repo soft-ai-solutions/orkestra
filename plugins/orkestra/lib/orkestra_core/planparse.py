@@ -325,6 +325,24 @@ def check_plan(spec_text: str, plan_text: str, project: Optional[Path] = None, *
     return problems
 
 
+_BROAD_TEST_RE = re.compile(r"^(?:npm\s+(?:run\s+)?test|yarn\s+test|pnpm\s+test|pytest|python3?\s+-m\s+pytest|"
+                            r"go\s+test(?:\s+\./\.\.\.)?|cargo\s+test|mvn\s+test|\./mvnw\s+test|npx\s+jest|"
+                            r"npx\s+vitest(?:\s+run)?|vitest(?:\s+run)?)$", re.I)
+
+
+def plan_notes(tasks: List[Task]) -> List[str]:
+    """Non-blocking NOTE lines: a Test that is a bare suite command, an Acceptance without Given/When/Then."""
+    notes: List[str] = []
+    for t in tasks:
+        cmd = t.fields.get("test", "").strip().strip("`").strip()
+        if cmd and _BROAD_TEST_RE.match(cmd):
+            notes.append(i18n.t("watchdog.note_test_broad", task=t.id, test=cmd))
+        words = set(P.fold(t.fields.get("acceptance", "")).split())
+        if t.fields.get("acceptance", "").strip() and not words & set(P.GWT_WORDS):
+            notes.append(i18n.t("watchdog.note_acceptance_vague", task=t.id))
+    return notes
+
+
 def check_trace(spec_text: str, verification_text: str) -> List[str]:
     """Every FR/SC id must appear in verification.md on a row marked PASS."""
     problems: List[str] = []

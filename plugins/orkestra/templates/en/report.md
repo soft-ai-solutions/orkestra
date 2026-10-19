@@ -16,6 +16,9 @@ test integrity, changed files, triage). Do not edit that block by hand; every nu
 ## Not done / deferred
 <review items that were deferred, things left out of scope; "None" if there are none>
 
+## Assumptions I made (autopilot)
+<Top 3 assumptions from spec.md and the plan changelog, each with how to reverse it; "None" if there are none.>
+
 ## How to try it
 <step by step: command / screen / URL>
 

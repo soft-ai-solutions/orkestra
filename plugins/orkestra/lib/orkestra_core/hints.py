@@ -20,7 +20,8 @@ DATA_RE = re.compile(r"schema\.prisma$|(^|/)migrations?/|\.sql$|(^|/)(models?|en
                      re.I)
 UI_RE = re.compile(r"(^|/)(components?|screens?|pages?|views?|app)/.*\.(tsx|jsx|vue|svelte)$"
                    r"|(^|/)(stores?|slices?|reducers?|hooks)(/|\.)", re.I)
-ORDER = ("security", "data", "stack-mobile", "stack-web", "ui-flow")
+STACK_EXT = (("stack-python", (".py",)), ("stack-go", (".go",)), ("stack-jvm", (".java", ".kt", ".kts", ".scala")))
+ORDER = ("security", "data", "stack-mobile", "stack-web", "stack-python", "stack-go", "stack-jvm", "ui-flow")
 
 
 def is_mobile(project: Path) -> bool:
@@ -48,4 +49,7 @@ def playbooks_for(files: Iterable[str], project: Path) -> List[str]:
             hit.add("ui-flow")
     if any(f.lower().endswith(CODE_EXT) for f in files):
         hit.add("stack-mobile" if is_mobile(project) else "stack-web")
+    for name, exts in STACK_EXT:
+        if any(f.lower().endswith(exts) for f in files):
+            hit.add(name)
     return [name for name in ORDER if name in hit]

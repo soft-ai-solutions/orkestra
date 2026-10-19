@@ -16,6 +16,9 @@ test bütünlüğü, değişen dosyalar, triage). Bu bloğu elle düzenleme; bur
 ## Yapılmayanlar / ertelenenler
 <defer edilen review maddeleri, kapsam dışı bırakılanlar; yoksa "Yok">
 
+## Yaptığım varsayımlar (otopilot)
+<spec.md ve plan değişiklik günlüğünden en önemli 3 varsayım, her biri nasıl geri alınır; yoksa "Yok".>
+
 ## Nasıl denersin
 <adım adım: komut / ekran / URL>
 

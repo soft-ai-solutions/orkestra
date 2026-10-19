@@ -23,9 +23,12 @@ Scope (`task <TID>` or `final`), project path, run folder. **Task scope: start w
 5. **Consistency** — follows existing patterns and AGENTS.md rules; minimal diff; no dead code/orphan imports; every changed line traces to the task (drive-by edits and speculative abstraction/config/error handling are findings).
 6. **Security** — input validation at boundaries, injection, authz, secrets/PII in code or logs.
 
+7. **Self-check before writing**: re-open each cited blocker/major `file:line`; drop any finding you cannot point to.
+
 ## On-demand checklists (`orkestra playbook <name>` — load only what the diff matches)
 - `security` — auth, handlers/server actions/webhooks, queries, env, HTML from external data, new deps
 - `stack-web` — .ts/.tsx/.js/.jsx · `stack-mobile` — Expo/React Native · `data` — schema, migrations, ORM queries
+- `stack-python`: .py · `stack-go`: .go · `stack-jvm`: .java/.kt/.scala
 Task scope: at most the single most relevant one. Final scope: every one that matches. None for docs/config-only diffs.
 
 ## Tool etiquette

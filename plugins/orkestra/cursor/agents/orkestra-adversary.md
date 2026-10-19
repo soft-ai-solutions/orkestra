@@ -23,7 +23,7 @@ Project path, run folder. Use `orkestra diff -p <project>`, `spec.md` (edge-case
 - State: concurrency/races, stale caches, re-entrancy, app backgrounding (mobile), time zones (Europe/Istanbul) and DST.
 - Security: injection (SQL/shell/HTML), authz bypass, IDOR, secrets/PII in logs, unsafe defaults, SSRF/path traversal.
 - Compatibility: old data/config, older clients, platform parity (web/iOS/Android/wear).
-- Deeper lists on demand (`orkestra playbook <name>`): `security` (auth/input/webhook/payment/data), `ui-flow` (handlers, shared stores or effects behind a control), `data` (schema/migrations/queries).
+- Deeper lists on demand (`orkestra playbook <name>`): `security` (auth/input/webhook/payment/data), `ui-flow` (handlers, shared stores or effects behind a control), `data` (schema/migrations/queries), `stack-python` / `stack-go` / `stack-jvm` (language pitfalls).
 
 You may run tests and read-only commands. Never modify source.
 

@@ -10,6 +10,8 @@ EN: Dict[str, str] = {
     "cli.no_project": ("not inside a project. cd into it or pass --project <name|path> (workspace: {workspace}). A folder "
                        "with no .git and no project file (package.json, pyproject.toml, Makefile, ...) is not recognised "
                        "by itself: run `orkestra init -p .` inside it once."),
+    "cli.no_open_run": "No run in {project}. Start one: orkestra run \"<what you want>\"",
+    "cli.start_need_request": "Say what you want: orkestra start \"<what you want>\" (or --request / --request-file).",
     "cli.io_error": "{detail}. Check that the location exists and that you can write to it.",
     "cli.internal_error": ("unexpected error ({error}). If a config or state file was edited by hand, `orkestra doctor` "
                            "shows what is wrong. Set ORKESTRA_DEBUG=1 for the full traceback."),
@@ -17,8 +19,13 @@ EN: Dict[str, str] = {
                           "can write to (default: ~/.orkestra)."),
     "cli.home_is_file": "it is a file, not a folder",
     # a run's state.json that exists but cannot be used
-    "cli.state_damaged": ("run '{run_id}': its state file {path} is damaged ({reason}). Restore it from a backup, or "
-                          "delete the run folders {rdir} and {fdir} to drop the run."),
+    "cli.state_damaged": ("run '{run_id}': its state file {path} is damaged ({reason}). Run `orkestra doctor --repair` "
+                          "to restore state.json.prev or move the run aside (nothing is deleted)."),
+    "cli.repair_restored": "run '{run_id}': state.json restored from state.json.prev",
+    "cli.repair_moved": "run '{run_id}': no usable backup, moved aside to {dest} (nothing deleted)",
+    "cli.repair_failed": "run '{run_id}': could not repair ({error})",
+    "cli.repair_none": "no damaged runs in {project}",
+    "cli.repair_no_project": "No orkestra project here. Run it inside the project folder.",
     "cli.damage_json": "not valid JSON",
     "cli.damage_object": "not a JSON object",
     "cli.damage_phase": "unknown phase {phase}",
@@ -134,6 +141,16 @@ EN: Dict[str, str] = {
     "cli.doctor_configured": "configured",
     "cli.doctor_not_configured": "not configured (optional)",
     "cli.doctor_mcp_failed": "could not run",
+    "cli.doctor_plugin_registered": "registered with Claude Code",
+    "cli.doctor_plugin_missing": "CLI found, plugin not installed: run `orkestra setup`",
+    "cli.doctor_hook_denied": "deny: git push --force",
+    "cli.doctor_next": "Ready. Next: cd <project> && orkestra run \"<what you want>\"",
+    "cli.setup_refused_agent": ("`orkestra setup` changes your Claude, Cursor and Copilot configuration, so it never runs "
+                                "inside an agent session. Open a terminal and run: orkestra setup"),
+    "cli.gate_confirm_none": ("There are no gates to confirm. Add some: `orkestra gate detect --write`, or list them "
+                              "under \"gates\" in .orkestra/config.json."),
+    "cli.init_no_gates": ("No gates detected. Add them by hand under \"gates\" in .orkestra/config.json, for example:\n"
+                          "  {example}"),
     "cli.doctor_all_passed": "doctor: all required checks passed",
     "cli.doctor_some_failed": "doctor: some required checks FAILED",
     # --- Cursor / Copilot kits: what an install or uninstall did (or, in a dry run, would do) ----------------------
@@ -214,14 +231,21 @@ TR: Dict[str, str] = {
     "cli.no_project": ("bir projenin içinde değilsiniz. Proje klasörüne girin (cd) ya da --project <ad|yol> verin "
                        "(çalışma alanı: {workspace}). .git ve proje dosyası (package.json, pyproject.toml, Makefile, ...) "
                        "olmayan bir klasör kendiliğinden tanınmaz: içindeyken bir kez `orkestra init -p .` çalıştırın."),
+    "cli.no_open_run": "{project} içinde açık run yok. Birini başlat: orkestra run \"<ne istediğin>\"",
+    "cli.start_need_request": "Ne istediğini yaz: orkestra start \"<ne istediğin>\" (ya da --request / --request-file).",
     "cli.io_error": "{detail}. Konumun var olduğunu ve oraya yazabildiğinizi kontrol edin.",
     "cli.internal_error": ("beklenmeyen hata ({error}). Bir yapılandırma ya da durum dosyası elle düzenlendiyse neyin "
                            "bozuk olduğunu `orkestra doctor` gösterir. Tam hata izi için ORKESTRA_DEBUG=1 verin."),
     "cli.home_unusable": ("orkestra ana klasörü {path} kullanılamıyor ({error}). ORKESTRA_HOME'u yazabileceğiniz bir "
                           "klasöre ayarlayın (varsayılan: ~/.orkestra)."),
     "cli.home_is_file": "klasör değil, bir dosya",
-    "cli.state_damaged": ("'{run_id}' run'ı: durum dosyası {path} bozuk ({reason}). Yedekten geri yükleyin ya da "
-                          "run'ı bırakmak için {rdir} ve {fdir} klasörlerini silin."),
+    "cli.state_damaged": ("'{run_id}' run'ı: durum dosyası {path} bozuk ({reason}). Düzeltmek için `orkestra doctor --repair` "
+                          "çalıştırın: state.json.prev geri yüklenir ya da run kenara taşınır (hiçbir şey silinmez)."),
+    "cli.repair_restored": "'{run_id}' run'ı: state.json, state.json.prev dosyasından geri yüklendi",
+    "cli.repair_moved": "'{run_id}' run'ı: kullanılabilir yedek yok, {dest} konumuna taşındı (hiçbir şey silinmedi)",
+    "cli.repair_failed": "'{run_id}' run'ı: onarılamadı ({error})",
+    "cli.repair_none": "{project} içinde bozuk run yok",
+    "cli.repair_no_project": "Burada bir orkestra projesi yok. Proje klasörünün içinde çalıştırın.",
     "cli.damage_json": "geçerli JSON değil",
     "cli.damage_object": "JSON nesnesi değil",
     "cli.damage_phase": "bilinmeyen faz {phase}",
@@ -330,6 +354,16 @@ TR: Dict[str, str] = {
     "cli.doctor_configured": "yapılandırılmış",
     "cli.doctor_not_configured": "yapılandırılmamış (isteğe bağlı)",
     "cli.doctor_mcp_failed": "çalıştırılamadı",
+    "cli.doctor_plugin_registered": "Claude Code'a kayıtlı",
+    "cli.doctor_plugin_missing": "CLI bulundu, eklenti kurulu değil: `orkestra setup` çalıştır",
+    "cli.doctor_hook_denied": "engellendi: git push --force",
+    "cli.doctor_next": "Hazır. Sıradaki: cd <proje> && orkestra run \"<ne istediğin>\"",
+    "cli.setup_refused_agent": ("`orkestra setup` Claude, Cursor ve Copilot yapılandırmanı değiştirir, bu yüzden bir ajan "
+                                "oturumunda çalışmaz. Bir terminal aç ve şunu çalıştır: orkestra setup"),
+    "cli.gate_confirm_none": ("Onaylanacak kapı yok. Ekle: `orkestra gate detect --write` ya da .orkestra/config.json "
+                              "içindeki \"gates\" altına yaz."),
+    "cli.init_no_gates": ("Kapı bulunamadı. .orkestra/config.json içinde \"gates\" altına elle ekle, örneğin:\n"
+                          "  {example}"),
     "cli.doctor_all_passed": "doctor: gerekli tüm kontroller geçti",
     "cli.doctor_some_failed": "doctor: bazı gerekli kontroller BAŞARISIZ",
     # --- Cursor / Copilot kits ---------------------------------------------------------------------------------

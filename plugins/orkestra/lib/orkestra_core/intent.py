@@ -439,7 +439,12 @@ _RISK_FLOOR_M = _LazyRe(
     r"odeme|ödeme|giris\s+(yap|ekle|ekran|sistem)|giriş\s+(yap|ekle|ekran|sistem)|"
     r"sifre\w*|şifre\w*|parola\w*|yetki\w*|fatura\w*|abonelik\w*|"
     r"sema|şema|kimlik|webhook|password|"
-    r"drop\s+table|drop\s+column|truncate)\b",
+    r"drop\s+table|drop\s+column|truncate|"
+    r"login|session|(?:auth|access|refresh|api|bearer|id)\s+token|jwt|sso|injection|xss|csrf|checkout|race\s+condition|concurrency|deadlock|"
+    r"rate\s+limit|crypto|data\s+loss|delete\s+account|cron|dependency\s+upgrade)\b|"
+    # an index is a risk only in a database context ("index.html", "the index page" are not)
+    r"\b(?:(?:create|add|drop|rebuild)\s+(?:an?\s+)?(?:unique\s+|composite\s+)?index\s+on|"
+    r"(?:db|sql|database|table|migration)s?\s+index\w*|index\s+(?:on|for)\s+(?:the\s+)?(?:\w+\s+)?table)\b",
     re.I,
 )
 # A real change, not a question and not a typo fix. "yazım" does not match "yaz".
@@ -464,9 +469,21 @@ _S_SIZE = _LazyRe(
     r"sub\s+fonksiyonu|düzelt(?:me)?\b|fix\s+(this|the|a)\b)\b",
     re.I,
 )
+# Small, local edits (a colour, a title, a version, a log line). Checked after risk and before the generic M cue, so
+# "add logging to the worker" is not read as "add X to Y feature". Vocabulary only grows.
+_S_SMALL = _LazyRe(
+    r"\b(?:(?:change|update|set|make|fix)\s+(?:the\s+)?(?:\w+\s+){0,5}"
+    r"(?:colou?r|title|label|heading|header|footer|padding|margin|font|icon|sticky|wording|copy)\b|"
+    r"bump\s+(?:the\s+)?version|remove\s+(?:an?\s+|the\s+)?unused|sort\w*\s+(?:\w+\s+){0,3}alphabetical\w*|"
+    r"add\s+(?:some\s+)?(?:logging|logs?|comments?|docstrings?)\b|"
+    r"\w*(?:renk|reng|başlık|başlığ|baslik|metin|yazı|simge)\w*\s+(?:\w+\s+){0,2}?(?:değiştir|degistir|güncelle|guncelle)\w*|"
+    r"readme\S*\s+(?:\w+\s+){0,3}not\w*\s+ekle)",
+    re.I,
+)
 _M_SIZE = _LazyRe(
     r"\b(feature|özellik|ekran|screen|endpoint|api\s+ekle|yeni\s+(modül|ekran|sayfa)|"
-    r"refactor\b|yeniden\s+yapılandır|dark\s+mode|yeni\s+özellik)\b",
+    r"refactor\b|yeniden\s+yapılandır|dark\s+mode|yeni\s+özellik|"
+    r"(?:add|export|import|implement)\s+(?!(?:a\s+)?(?:test|helper|function|method)\b)(?:\w+\s+){0,3}(?:to|in|into)\s+(?:the\s+)?\w+)\b",
     re.I,
 )
 # Explain / Q&A / read-only asks: still open a tracked run (dashboard), but stay on the XS fast track.
@@ -567,6 +584,8 @@ def _base_size(text: str, low: str, n: int) -> str:
         return "XS"
     if _XS_SIZE.search(low) and n < 220:
         return "XS"
+    if _S_SMALL.search(low) and n < 220:
+        return "S"
     if _M_SIZE.search(low):
         return "M"
     if _S_SIZE.search(low):
@@ -574,8 +593,6 @@ def _base_size(text: str, low: str, n: int) -> str:
     # An article or other non-code job does not need scouts, a plan critic, or an adversary.
     from .workkind import classify
     if classify(text) in ("writing", "general"):
-        return "S"
-    if n < 140:
         return "S"
     return "M"
 

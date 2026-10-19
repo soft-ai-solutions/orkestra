@@ -359,7 +359,7 @@ class TestSkillsAndAgents(unittest.TestCase):
         "Sınıflandırma", "Tür", "Etkilenen yüzeyler",
         "Netleştirmeler", "Varsayımlar ve açık riskler", "(Önerilen)", "Kapsam dışı", "Plan değişiklik günlüğü",
         "İstisnalar", "Yapılmayanlar / ertelenenler", "Commit önerisi", "hiçbir şey commit'lenmedi", "Bağımlı",
-        "İ/ı",
+        "İ/ı", "Yaptığım varsayımlar (otopilot)", "Yeniden üretim",
     )
     UNCONDITIONAL_TURKISH = (
         re.compile(r"(?i)\b(?:in|to|answer|report)\b[^\n.;:(]{0,25}\bTurkish\b"

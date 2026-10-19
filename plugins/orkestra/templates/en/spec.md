@@ -11,6 +11,9 @@ created: {{date}}
 ## Purpose and value
 <Which problem is solved for the user/product, who benefits, what success looks like. 2-4 sentences.>
 
+## Reproduction
+<Bugfix only, otherwise delete this section: the command that shows the bug, observed vs expected.>
+
 ## Scope
 ### In scope
 - <item>

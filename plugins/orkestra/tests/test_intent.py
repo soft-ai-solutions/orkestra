@@ -202,6 +202,26 @@ SIZE_CASES = {
     "boyut: S add oauth login": "M",
     "boyut: L typo düzelt README": "XS",
     "typo düzelt payment label": "XS",
+    "add a login page": "M",
+    "fix session expiry": "M",
+    "rotate the jwt token": "M",
+    "prevent csrf on forms": "M",
+    "fix race condition in the queue": "M",
+    "add rate limit to the api": "M",
+    "add an index on users": "M",
+    "export reports to csv in the admin": "M",
+    "import contacts from the file into the app": "M",
+    "upgrade dependency upgrade lodash": "M",
+    "fix typo": "XS",
+    "bugfix: null check": "S",
+    # small local edits stay S (they were M once the length fallback went away)
+    "change the button color to blue": "S", "bump version to 1.2.3": "S", "remove unused import": "S",
+    "add logging to the worker": "S", "make header sticky": "S", "sort the list alphabetically": "S",
+    "update the index page title": "S", "update the design token for primary color": "S",
+    "buton rengini değiştir": "S", "index.html başlığını değiştir": "S", "README'ye kurulum notu ekle": "S",
+    # the risky neighbours stay M
+    "add an index on the users table": "M", "create index on orders": "M", "rotate the access token": "M",
+    "add logging to the login flow": "M", "change the password reset title": "M",
 }
 
 

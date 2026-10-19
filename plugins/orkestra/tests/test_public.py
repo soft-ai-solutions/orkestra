@@ -13,6 +13,7 @@ import helpers
 from test_tempo import TempoBase
 
 ROOT = helpers.PLUGIN.parent.parent
+RUN_ARTIFACT_PREFIXES = ("reviews/",)    # per-run files under .orkestra/features/<run>/ (gitignored, absent from a fresh clone)
 
 
 class TestTaskReviewIsEnforced(TempoBase):
@@ -182,6 +183,17 @@ class TestPublicRepository(unittest.TestCase):
                         sibling_hits.append(f"plugins/orkestra/{rel}:{i}: {line.strip()[:80]}")
         self.assertEqual(sibling_hits[:15], [])
 
+    def test_platform_header_matches_the_ci_state(self):
+        """Windows stays "experimental" in both READMEs until a windows-latest unit job is confirmed green (flip this flag then)."""
+        windows_unit_job_confirmed_green = False
+        for doc, plain, claimed in (("README.md", "macOS and Linux (Windows: experimental)", "macOS, Linux and Windows"),
+                                    ("README.tr.md", "macOS ve Linux (Windows: deneysel)", "macOS, Linux ve Windows")):
+            head = "\n".join((ROOT / doc).read_text(encoding="utf-8").splitlines()[:12])
+            self.assertEqual(plain in head, not windows_unit_job_confirmed_green, doc)
+            self.assertEqual(claimed in head, windows_unit_job_confirmed_green, doc)
+        workflow = (ROOT / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
+        self.assertIn("windows-latest", workflow)             # the job exists; "green" is a human-confirmed fact
+
     def test_documents_point_at_files_that_exist(self):
         for doc in ("README.md", "README.tr.md", "ORKESTRA.md", "ORKESTRA.tr.md", "CONTRIBUTING.md", "SECURITY.md",
                     "THIRD_PARTY_NOTICES.md"):
@@ -189,6 +201,8 @@ class TestPublicRepository(unittest.TestCase):
             for target in re.findall(r"\]\(((?!https?:|#|mailto:)[^)\s]+)\)", text):
                 self.assertTrue((ROOT / target.split("#")[0]).exists(), f"{doc} links to missing {target}")
             for name in re.findall(r"`((?:[\w.-]+/)*[\w.-]+\.(?:md|sh|html))`", text):
+                if name.startswith(RUN_ARTIFACT_PREFIXES):          # written into a run folder, absent from a clean clone
+                    continue
                 if "/" in name or name.isupper() or name[0].isupper():
                     hit = (ROOT / name).exists() or (helpers.PLUGIN / name).exists() or list(ROOT.glob(f"**/{name}"))
                     self.assertTrue(hit or name.startswith(("<", "~")) or "*" in name, f"{doc} names missing file {name}")

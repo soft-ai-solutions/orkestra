@@ -31,7 +31,9 @@ def _pkg_manager(project: Path) -> str:
         return "yarn"
     if (project / "bun.lockb").exists() or (project / "bun.lock").exists():
         return "bun"
-    return "npm"
+    declared = str((read_json(project / "package.json", default={}) or {}).get("packageManager") or "")
+    name = declared.split("@", 1)[0]
+    return name if name in ("pnpm", "yarn", "bun") else "npm"
 
 
 def _run_script(pm: str, script: str) -> str:
@@ -74,19 +76,46 @@ def detect(project: Path) -> List[Dict[str, Any]]:
     _detect_dir(project, ".", add)
     root_has_workspaces = bool((read_json(project / "package.json", default={}) or {}).get("workspaces")) \
         or (project / "pnpm-workspace.yaml").exists()
-    if not root_has_workspaces:
+    # a workspace root that declares no gates of its own: its apps/* and packages/* carry them
+    scan_children = not root_has_workspaces or not gates
+    if scan_children:
         subs: List[Path] = []
-        for d in SUBPROJECT_DIRS:
+        for d in (SUBPROJECT_DIRS if not root_has_workspaces else ()):
             if (project / d).is_dir():
                 subs.append(project / d)
-        for parent in ("apps", "packages", "services"):
+        for parent in (("apps", "packages", "services") if not root_has_workspaces else ("apps", "packages")):
             if (project / parent).is_dir():
                 subs += sorted(p for p in (project / parent).iterdir() if p.is_dir() and not p.name.startswith("."))
         for sub in subs[:12]:
             rel = str(sub.relative_to(project))
             prefix = sub.name
             _detect_dir(sub, rel, lambda g, prefix=prefix: add(dict(g, name=f"{prefix}:{g['name']}")))
+    if not gates and (project / "android").is_dir():
+        _detect_dir(project / "android", "android", lambda g: add(dict(g, name=f"android:{g['name']}")))
     return gates
+
+
+# a real unittest suite: a TestCase subclass or a plain `import unittest` (not `from unittest.mock import patch`)
+_UNITTEST_USE_RE = re.compile(r"^\s*class\s+\w+\s*\([^)]*TestCase\b|^\s*import\s+unittest\s*(?:#.*)?$", re.M)
+
+
+def _uses_unittest_only(d: Path, pyproject: str, test_dirs: List[str], root_py_tests: List[Path]) -> bool:
+    """True when the tests are plain unittest and pytest is not a declared dependency or configured."""
+    if "pytest" in pyproject or any((d / f).exists() for f in ("pytest.ini", "conftest.py", "tox.ini")):
+        return False
+    for f in ("requirements.txt", "requirements-dev.txt", "setup.py", "setup.cfg", "Pipfile"):
+        if (d / f).exists() and "pytest" in (d / f).read_text(encoding="utf-8", errors="replace"):
+            return False
+    files = list(root_py_tests)
+    for x in test_dirs:
+        files += sorted((d / x).glob("test*.py"))[:5]
+    for f in files[:8]:
+        try:
+            if _UNITTEST_USE_RE.search(f.read_text(encoding="utf-8", errors="replace")):
+                return True
+        except OSError:
+            continue
+    return False
 
 
 def _detect_dir(d: Path, cwd: str, add: Any) -> None:
@@ -109,13 +138,25 @@ def _detect_dir(d: Path, cwd: str, add: Any) -> None:
         if "build" in scripts:
             add(_gate("build", _run_script(pm, "build"), "build", timeout=1800, cwd=cwd))
 
-    if (d / "pyproject.toml").exists() or (d / "requirements.txt").exists() or (d / "setup.py").exists():
+    root_py_tests = sorted(d.glob("test_*.py")) if not pj.exists() else []      # a stray script in a JS repo is no suite
+    if (d / "pyproject.toml").exists() or (d / "requirements.txt").exists() or (d / "setup.py").exists() or root_py_tests:
         runner = "uv run " if (d / "uv.lock").exists() else ("poetry run " if (d / "poetry.lock").exists() else "")
         py = "python3 -m " if not runner else ""
+        if not runner:
+            for venv in (".venv", "venv"):
+                if (d / venv / "bin" / "python").exists():
+                    py = f"{venv}/bin/python -m "
+                    break
         pyproject = (d / "pyproject.toml").read_text(encoding="utf-8", errors="replace") if (d / "pyproject.toml").exists() else ""
-        has_tests = any((d / x).is_dir() for x in ("tests", "test")) or "pytest" in pyproject
+        test_dirs = [x for x in ("tests", "test") if (d / x).is_dir()]
+        src_tests = sorted(d.glob("src/**/tests"))[:1] if (d / "src").is_dir() else []
+        has_tests = bool(test_dirs or src_tests or root_py_tests) or "pytest" in pyproject
         if has_tests:
-            add(_gate("pytest", f"{runner}{py}pytest -q", "test", cwd=cwd))
+            if _uses_unittest_only(d, pyproject, test_dirs, root_py_tests):
+                start = test_dirs[0] if test_dirs else "."
+                add(_gate("unittest", f"{runner}{py}unittest discover -s {start} -q", "test", cwd=cwd))
+            else:
+                add(_gate("pytest", f"{runner}{py}pytest -q", "test", cwd=cwd))
         if "[tool.ruff" in pyproject or (d / "ruff.toml").exists() or (d / ".ruff.toml").exists():
             add(_gate("ruff", f"{runner}{py}ruff check .", "lint", cwd=cwd))
         if "[tool.mypy" in pyproject or (d / "mypy.ini").exists():
@@ -143,6 +184,10 @@ def _detect_dir(d: Path, cwd: str, add: Any) -> None:
         add(_gate("maven-test", f"{mvn} -q test", "test", timeout=2400, cwd=cwd))
     elif ((d / "build.gradle").exists() or (d / "build.gradle.kts").exists()) and (d / "gradlew").exists() and not pj.exists():
         add(_gate("gradle-test", "./gradlew test --quiet", "test", timeout=2400, cwd=cwd))
+    elif not pj.exists() and any((d / f).exists() for f in ("settings.gradle", "settings.gradle.kts", "build.gradle",
+                                                              "build.gradle.kts")):
+        gradle = "./gradlew" if (d / "gradlew").exists() else "gradle"
+        add(_gate("gradle-test", f"{gradle} test --quiet", "test", timeout=2400, cwd=cwd))
 
     slns = list(d.glob("*.sln"))
     if slns or list(d.glob("*.csproj")):
@@ -153,6 +198,13 @@ def _detect_dir(d: Path, cwd: str, add: Any) -> None:
         for tp in test_projs:
             rel = str(tp.parent.relative_to(d))
             add(_gate("dotnet-test", f"dotnet test {rel} --nologo -v q", "test", timeout=1800, cwd=cwd))
+        # no test project two levels down: one solution / project set one level down (src/App.sln, src/App.csproj)
+        for np_ in ([] if test_projs else (sorted(d.glob("*/*.sln"))[:1] or sorted(d.glob("*/*.csproj"))[:3])):
+            rel = str(np_.relative_to(d))
+            if "test" not in np_.name.lower():
+                add(_gate("dotnet-build", f"dotnet build {rel} --nologo -v q", "build", timeout=1800, cwd=cwd))
+            if np_.suffix == ".sln" or "test" in np_.name.lower():
+                add(_gate("dotnet-test", f"dotnet test {rel} --nologo -v q", "test", timeout=1800, cwd=cwd))
 
     if (d / "Package.swift").exists():
         add(_gate("swift-build", "swift build", "build", timeout=1800, cwd=cwd))
@@ -163,12 +215,32 @@ def _detect_dir(d: Path, cwd: str, add: Any) -> None:
         if "test" in (data.get("scripts") or {}):
             add(_gate("composer-test", "composer test", "test", cwd=cwd))
 
+    if (d / "Gemfile").exists():
+        if (d / "spec").is_dir() or (d / ".rspec").exists():
+            add(_gate("rspec", "bundle exec rspec", "test", cwd=cwd))
+        elif (d / "Rakefile").exists() or (d / "test").is_dir():
+            add(_gate("rake-test", "bundle exec rake test", "test", cwd=cwd))
+
+    if (d / "mix.exs").exists():
+        add(_gate("mix-test", "mix test", "test", timeout=1800, cwd=cwd))
+
+    if (d / "deno.json").exists() or (d / "deno.jsonc").exists():
+        add(_gate("deno-test", "deno test", "test", cwd=cwd))
+
+    cml = d / "CMakeLists.txt"
+    if cml.exists() and re.search(r"enable_testing|add_test|include\(CTest\)",
+                                  cml.read_text(encoding="utf-8", errors="replace"), re.I):
+        add(_gate("ctest", "cmake -S . -B build && cmake --build build && ctest --test-dir build --output-on-failure",
+                  "test", timeout=1800, cwd=cwd))
+
     mk = d / "Makefile"
     if mk.exists() and cwd == "." and not any((d / m).exists() for m in ("package.json", "go.mod", "Cargo.toml", "pom.xml")):
         txt = mk.read_text(encoding="utf-8", errors="replace")
         for target, kind in (("test", "test"), ("lint", "lint"), ("build", "build")):
             if re.search(rf"^{target}\s*:", txt, re.M):
                 add(_gate(f"make-{target}", f"make {target}", kind, cwd=cwd))
+        if not re.search(r"^test\s*:", txt, re.M) and re.search(r"^check\s*:", txt, re.M):
+            add(_gate("make-check", "make check", "test", cwd=cwd))
 
 
 # ---------------------------------------------------------------- running
@@ -337,6 +409,37 @@ def _run_tree(cmd, *, cwd: str, env: dict, timeout: int) -> "subprocess.Complete
     return subprocess.CompletedProcess(cmd, code, stdout=kept, stderr=b"")
 
 
+_ENV_ERROR_RE = re.compile(
+    r"command not found|could not start the command|spawn \S+ ENOENT|could not determine executable to run"
+    r"|npx canceled due to missing packages|node_modules[/\\]\.bin[/\\][^\s:]*:?\s*(?:not found|No such file)", re.I)
+# A missing JS module is the gate's own dependency only when it is a bare package name; './x' is the code under test.
+_JS_MODULE_RE = re.compile(r"^(?!.*\bTS2307\b).*Cannot find module ['\"]([^'\"]+)['\"]", re.I | re.M)
+_PY_MODULE_RE = re.compile(r"No module named ['\"]?([\w.]+)", re.I)
+_PY_TOOL_MODULES = frozenset((
+    "pytest", "_pytest", "pluggy", "ruff", "mypy", "pip", "unittest", "black", "flake8", "pylint", "coverage", "tox",
+    "nox", "poetry", "setuptools", "wheel", "build", "twine"))
+
+
+def is_env_error(code: int, output: str, cmd: str = "") -> bool:
+    """True when a failed gate could not run at all (missing tool or dependency), as opposed to a real failure.
+    A missing module counts only when it is the gate's own tool (pytest, the `-m` module) or a bare JS package;
+    code under test that fails to import ('No module named app.x', "Cannot find module './x'", TS2307) is a real red."""
+    if code in (126, 127):
+        return True
+    tail = tail_lines(output, 30, 3000)
+    if _ENV_ERROR_RE.search(tail):
+        return True
+    own = set(_PY_TOOL_MODULES)
+    own.update(m.split(".")[0] for m in re.findall(r"-m\s+([\w.]+)", cmd or ""))
+    for m in _PY_MODULE_RE.finditer(tail):
+        if m.group(1).split(".")[0] in own:
+            return True
+    for m in _JS_MODULE_RE.finditer(tail):
+        if not m.group(1).startswith((".", "/", "@/", "~")):
+            return True
+    return False
+
+
 def run_gate(project: Path, gate: Dict[str, Any], log_dir: Path, label: str, abort: Any = None) -> Dict[str, Any]:
     log_dir.mkdir(parents=True, exist_ok=True)
     cwd = (Path(project) / gate.get("cwd", ".")).resolve(strict=False)
@@ -361,7 +464,7 @@ def run_gate(project: Path, gate: Dict[str, Any], log_dir: Path, label: str, abo
             output = raw.decode("utf-8", "replace")
             if reason == "timeout":
                 timed_out = True
-                output += "\n[orkestra] TIMEOUT"
+                output += "\n[orkestra] TIMEOUT " + i18n.t("runs.gate_timeout_hint", seconds=timeout)
             elif reason == "idle":
                 timed_out = idle = True
                 output += f"\n[orkestra] TIMEOUT-IDLE (no output for {idle_timeout}s)"
@@ -382,6 +485,8 @@ def run_gate(project: Path, gate: Dict[str, Any], log_dir: Path, label: str, abo
     }
     if idle:
         res["idle_timeout"] = True
+    if code != 0 and not timed_out and is_env_error(code, output, str(gate.get("cmd") or "")):
+        res["env_error"] = True
     return res
 
 
@@ -520,8 +625,18 @@ def compare(baseline: List[Dict[str, Any]], current: List[Dict[str, Any]]) -> Di
         if name not in c:
             missing.append(name)
     ok = not regressions and not new_fail and not missing
+    env_errors = [n for n, cur in c.items() if cur.get("env_error") and not cur["ok"]
+                  and n not in regressions and n not in new_fail]
+    pre_existing = [n for n in pre_existing if n not in env_errors]
     return {"ok": ok, "regressions": regressions, "fixed": fixed, "pre_existing_failures": pre_existing,
-            "new_gate_failures": new_fail, "new_gate_passes": new_pass, "not_run": missing}
+            "new_gate_failures": new_fail, "new_gate_passes": new_pass, "not_run": missing,
+            "env_errors": env_errors}
+
+
+def all_env_error(results: List[Dict[str, Any]]) -> bool:
+    """Every gate that ran failed because it could not start (nothing was actually checked)."""
+    ran = [r for r in results if not r.get("skipped")]
+    return bool(ran) and all(r.get("env_error") and not r["ok"] for r in ran)
 
 
 def format_results(results: List[Dict[str, Any]], comparison: Optional[Dict[str, Any]] = None,
@@ -544,9 +659,14 @@ def format_results(results: List[Dict[str, Any]], comparison: Optional[Dict[str,
         out += "\n\n" + i18n.t("runs.gates_carried", names=", ".join(carried))
     if comparison is not None:
         out += "\n\n" + ("NO REGRESSIONS" if comparison["ok"] else "REGRESSION DETECTED")
+        if all_env_error(results):
+            out += "\n" + i18n.t("runs.gates_none_ran")
         for key in ("regressions", "new_gate_failures", "not_run", "pre_existing_failures", "fixed"):
             if comparison.get(key):
                 out += f"\n- {key}: {', '.join(comparison[key])}"
+    env = [r["name"] for r in results if r.get("env_error") and not r["ok"]]
+    if env:
+        out += "\n\n" + i18n.t("runs.gates_env_error", count=len(env), names=", ".join(env))
     for r in results:
         if not r["ok"]:
             out += f"\n\n--- {r['name']} (exit {r['exit']}) tail — full log: {r['log']}\n{r['tail']}"

@@ -11,6 +11,9 @@ created: {{date}}
 ## Amaç ve değer
 <Kullanıcı/ürün için hangi problem çözülüyor, kim faydalanıyor, başarı neye benzer — 2-4 cümle.>
 
+## Yeniden üretim
+<Yalnız hata düzeltmede, aksi halde bu bölümü sil: hatayı gösteren komut, gözlenen ve beklenen sonuç.>
+
 ## Kapsam
 ### Kapsam içi
 - <madde>

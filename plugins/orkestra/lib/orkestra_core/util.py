@@ -402,12 +402,16 @@ _TR_MAP = str.maketrans({"ı": "i", "İ": "i", "ş": "s", "Ş": "s", "ğ": "g", 
 
 
 def slugify(text: str, max_len: int = 40) -> str:
-    text = (text or "").translate(_TR_MAP)
+    src = text or ""
+    text = src.translate(_TR_MAP)
     text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
     text = re.sub(r"[^a-zA-Z0-9]+", "-", text).strip("-").lower()
     if len(text) > max_len:
         text = text[:max_len].rstrip("-")
-    return text or "feature"
+    if not text:
+        digest = hashlib.sha1((src or "").encode("utf-8")).hexdigest()[:6]
+        return f"feature-{digest}" if src.strip() else "feature"
+    return text
 
 
 def norm_lower(text: str) -> str:

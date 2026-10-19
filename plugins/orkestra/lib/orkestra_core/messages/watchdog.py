@@ -20,6 +20,10 @@ EN: Dict[str, str] = {
     "watchdog.auto_resume_limit": " → auto-resume limit reached, you need to continue it (/orkestra:resume)",
     # `orkestra watchdog` output
     "watchdog.no_open_runs": "No open orkestra runs.",
+    "watchdog.damaged_run": "[{project}] DAMAGED run {run_id}: state.json is unreadable. Run `orkestra doctor --repair` to restore it from state.json.prev.",
+    "watchdog.damaged_run_noprev": "[{project}] DAMAGED run {run_id}: state.json is unreadable and there is no state.json.prev. Run `orkestra doctor --repair` to move it aside.",
+    "watchdog.note_test_broad": "NOTE {task}: the Test line runs the whole suite ({test}); name a path or filter (-k, -run, --testNamePattern).",
+    "watchdog.note_acceptance_vague": "NOTE {task}: the Acceptance line has no Given/When/Then; state the check as a concrete case.",
     "watchdog.loop_line": "   loop: {loops}",
     "watchdog.resume_line": "   auto-resume: {why}",
     # fast watcher (fastwatch.py): one notification per incident, in the incident's own words
@@ -64,6 +68,10 @@ TR: Dict[str, str] = {
     "watchdog.auto_resumed": " → otomatik devam ettirildi (deneme {attempt})",
     "watchdog.auto_resume_limit": " → otomatik devam sınırı aşıldı, senin devam ettirmen gerekiyor (/orkestra:resume)",
     "watchdog.no_open_runs": "Açık orkestra çalışması yok.",
+    "watchdog.damaged_run": "[{project}] BOZUK çalışma {run_id}: state.json okunamıyor. `orkestra doctor --repair` ile state.json.prev dosyasından geri yükle.",
+    "watchdog.damaged_run_noprev": "[{project}] BOZUK çalışma {run_id}: state.json okunamıyor ve state.json.prev yok. Kenara almak için `orkestra doctor --repair` çalıştır.",
+    "watchdog.note_test_broad": "NOT {task}: Test satırı tüm paketi çalıştırıyor ({test}); bir yol veya süzgeç ver (-k, -run, --testNamePattern).",
+    "watchdog.note_acceptance_vague": "NOT {task}: Kabul satırında Verilen/Eğer/İse yok; kontrolü somut bir durum olarak yaz.",
     "watchdog.loop_line": "   döngü: {loops}",
     "watchdog.resume_line": "   otomatik devam: {why}",
     "watchdog.fast_deny_loop": "[{project}] RET DÖNGÜSÜ: aynı ret {count} kez ({what}). Ajan engellenmiş bir eylemi tekrar deniyor; yaklaşımı değiştir ya da run'ı engelle.",

@@ -123,8 +123,7 @@ the catalogs and the vocabulary files (`i18n.py`, `intent.py`, `util.py`, `guard
 (`ONBOARDING.md` and `ONBOARDING.tr.md` the same way; `ORKESTRA.md` and `ORKESTRA.tr.md` likewise). Name only commands
 and flags that exist: `tests/test_docs_drift.py` parses the docs against the real CLI parser, checks that relative links
 and anchors resolve, that the two languages mirror each other and that version strings match. The architecture page is
-`docs/architecture.html` (English) and `docs/orkestra-mimari.html` (Turkish); the root `orkestra-mimari.html` is a copy of
-the Turkish page and must stay in sync with it.
+`docs/architecture.html` (English) and `docs/orkestra-mimari.html` (Turkish); there is no second copy at the repo root.
 
 ## Adding a language
 

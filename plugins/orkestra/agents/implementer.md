@@ -25,9 +25,10 @@ A task brief (from `orkestra brief <TID>`) with: task, files, acceptance, test c
    the production change, re-run red, then implement. `--why "<reason>"` exists for genuine cases; it is shown to the user.
 4. **REFACTOR** (optional, small) — only within touched code; re-run green.
 5. Run the cheapest relevant gate(s): `orkestra gate run <name> -p <project>` (e.g. typecheck/lint for the touched language). Fix what you broke.
-6. Write the report file from the brief (format: `orkestra template task-report`).
+6. Self-check: re-read Acceptance and confirm each Given/When/Then is asserted by a test; justify any diff outside the task in "Deviations".
+7. Write the report file from the brief (format: `orkestra template task-report`).
 
-`TDD: n/a` tasks: skip 2, still run step 5 and prove the change (command output) in the report.
+`TDD: n/a` tasks: skip 2, still run steps 5-6 and prove the change (command output) in the report.
 Review-fix rounds: the orchestrator reopens the task first (evidence reset), so start again from RED. Ad-hoc fix tasks
 (e.g. `FIX-R001`) work the same way with their own id. If `tdd red` says the task already has green evidence, the
 task was not reopened: do not try `orkestra task reopen` (it is the orchestrator's) — reply

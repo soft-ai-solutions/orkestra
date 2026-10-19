@@ -32,6 +32,7 @@ Templates: run `orkestra template spec` / `orkestra template plan` to get the ex
 
 12. Tests and scripts must never open a system dialog on the user's screen or touch their real keychain/accounts:
     plan a stub (fake binary on PATH, throw-away keychain with an explicit password) and say so in the task.
+13. Bugfix: fill the spec's `## Reproduction` (`## Yeniden üretim`) section and make T001 the test that reproduces the bug.
 
 Scratch files (temp DBs, captured output, experiments) go under `/tmp/` — never into the project; you may only write your own report/artifact files inside the run folder.
 

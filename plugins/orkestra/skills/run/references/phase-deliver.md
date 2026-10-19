@@ -9,6 +9,8 @@ Goal: the user gets the value, the proof, and a project that remembers.
    `orkestra report evidence --write -p <project>`: the CLI inserts the machine-generated evidence block (approval, gate
    baseline vs verify, red/green exits per task, integrity, changed files, triage). Never edit that block; `phase next`
    regenerates and compares it. Every number you state must come from that block.
+   Fill `## Assumptions I made (autopilot)` / `## Yaptığım varsayımlar (otopilot)`: top 3 assumptions from spec.md and the plan changelog, each with how to reverse it.
+   List the DEFERRED/UNVERIFIED rows of `verification.md` under Not done / deferred.
 4. Memory (keep it short, durable, true):
    - `orkestra memory feature-add -p <project> --title "<title>" --summary "<one line value>" --capabilities "<cap1,cap2>"`
    - Living specs: for each capability touched, update `.orkestra/memory/specs/<capability>.md` to describe the CURRENT behavior (merge, don't append history; ≤ 80 lines each).
@@ -22,5 +24,5 @@ Goal: the user gets the value, the proof, and a project that remembers.
    `--dry-run`). Opt out: `"cleanup_artifacts": false` in `~/.orkestra/config.json` or the project's
    `.orkestra/config.json`.
 6. Final chat message (in the user's language, ≤ 15 lines): what was delivered + value, evidence (only facts from the evidence block),
-   how to try, anything not done or unverified (say so plainly), path to report.md, suggested commit message, and that
+   how to try, the top assumptions and the DEFERRED/UNVERIFIED rows (say so plainly), path to report.md, suggested commit message, and that
    nothing was committed or pushed.

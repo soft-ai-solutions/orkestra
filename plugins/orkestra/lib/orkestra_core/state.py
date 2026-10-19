@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import re
 import time
@@ -9,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from . import i18n, paths
-from .util import (LockTimeout, append_record, file_lock, now_iso, read_json, slugify, write_json_atomic)
+from .util import (LockTimeout, append_record, file_lock, now_iso, read_json, slugify, write_json_atomic, write_text_atomic)
 
 PHASES = ["intake", "discover", "clarify", "plan", "approve",
           "implement", "verify", "review", "deliver", "done"]
@@ -67,7 +68,43 @@ def _state_damage(st: Any) -> str:
 
 def save_state(project: Path, st: Dict[str, Any]) -> None:
     st["updated"] = now_iso()
-    write_json_atomic(state_path(project, st["run_id"]), st)
+    path = state_path(project, st["run_id"])
+    _keep_prev(path)
+    write_json_atomic(path, st)
+
+
+def _keep_prev(path: Path) -> None:
+    """Copy the current state.json to state.json.prev (only while it parses) before it is replaced."""
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+        json.loads(text)
+    except (OSError, ValueError):
+        return                                  # missing or already damaged: never overwrite a good .prev with it
+    with contextlib.suppress(OSError):
+        write_text_atomic(path.with_name(path.name + ".prev"), text)
+
+
+def is_damaged(run_dir: Path) -> bool:
+    """state.json exists but is not a readable JSON object."""
+    path = Path(run_dir) / "state.json"
+    if not path.exists():
+        return False
+    return not isinstance(read_json(path), dict)
+
+
+def is_aside_copy(name: str) -> bool:
+    """True for a run folder `doctor --repair` moved aside (`<id>.damaged`, `<id>.damaged2`, ...): not a live run."""
+    return re.search(r"\.damaged\d*$", name) is not None
+
+
+def restore_prev(run_dir: Path) -> bool:
+    """Put state.json.prev back as state.json when it is a valid state. True when restored."""
+    prev = Path(run_dir) / "state.json.prev"
+    data = read_json(prev)
+    if not isinstance(data, dict) or not data.get("run_id"):
+        return False
+    write_json_atomic(Path(run_dir) / "state.json", data)
+    return True
 
 
 class StateTxn:

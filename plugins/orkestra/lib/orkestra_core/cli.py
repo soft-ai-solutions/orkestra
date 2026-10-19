@@ -188,7 +188,7 @@ def _resolve_project(arg: Optional[str], required: bool = True) -> Optional[Path
 def _run_id(project: Path, arg: Optional[str]) -> str:
     rid = arg or project_active_run(project)
     if not rid:
-        raise OrkestraError(f"no open run in {project.name}. Start one with `orkestra start --title ... --request ...`")
+        raise OrkestraError(i18n.t("cli.no_open_run", project=project.name))
     return rid
 
 
@@ -449,17 +449,29 @@ def cmd_init(a: argparse.Namespace) -> int:
     _out(f"initialized {project.name}: " + (", ".join(created) if created else "already initialized"))
     cfg = paths.project_config(project)
     _out("detected gates: " + (", ".join(f"{g['name']}=`{g['cmd']}`" for g in cfg.get("gates") or []) or "none"))
+    if not cfg.get("gates"):
+        _out(i18n.t("cli.init_no_gates", example='{"gates": [{"name": "test", "kind": "test", "cmd": "npm test", "timeout": 600}]}'))
     return 0
+
+
+def _title_from_request(request: str) -> str:
+    """A run title from the request: its first non-empty line, whitespace folded, cut at a word boundary (60 chars)."""
+    first = next((ln for ln in request.splitlines() if ln.strip()), "")
+    text = " ".join(first.split())
+    if len(text) > 60:
+        text = text[:60].rsplit(" ", 1)[0].rstrip(" ,;:.") + "…" if " " in text[:60] else text[:60]
+    return text
 
 
 def cmd_start(a: argparse.Namespace) -> int:
     project = _resolve_project(a.project)
     assert project is not None
-    request = a.request or ""
+    request = a.request or getattr(a, "text", None) or ""
     if a.request_file:
         request = _read_request_file(Path(a.request_file))
     if not request.strip():
-        raise OrkestraError("--request or --request-file is required (the user's request, verbatim)")
+        raise OrkestraError(i18n.t("cli.start_need_request"))
+    title = (a.title or "").strip() or _title_from_request(request)
     mode = "headless" if (a.headless or _mode() == "headless") else "interactive"
     try:
         engine = EN.normalize(getattr(a, "engine", None) or _ASKER, EN.default_engine(paths.global_config()))
@@ -476,7 +488,7 @@ def cmd_start(a: argparse.Namespace) -> int:
         raise OrkestraError(f"invalid size {size!r}")
     _require_project_config(project)
     _require_usable_home()
-    st = R.start_run(project, a.title, request, size, mode, engine, approval_mode)
+    st = R.start_run(project, title, request, size, mode, engine, approval_mode)
     rid = st["run_id"]
     kept = _bind_here(project, rid)
     _out(f"run started: {rid} in {project}" + ("" if engine == "claude" else f" (engine: {engine})"))
@@ -493,6 +505,8 @@ def cmd_start(a: argparse.Namespace) -> int:
     _out(f"size: {size}{size_note}")
     _out(f"baseline: git={st['baseline']['git']} head={str(st['baseline'].get('head'))[:12]} "
          f"uncommitted_files={st['baseline']['dirty_files']}")
+    if not st["baseline"]["git"]:
+        _out(i18n.t("runs.no_git_rollback"))
     if st["baseline"]["dirty_files"]:
         _out("NOTE: the working tree already had uncommitted changes. They are backed up and will never be "
              "attributed to this run. Tell the user.")
@@ -689,6 +703,9 @@ def cmd_gate(a: argparse.Namespace) -> int:
             _out("no gates configured — edit .orkestra/config.json or run `orkestra gate detect --write`")
         return 0
     if a.action == "confirm":
+        if not cfg.get("gates"):
+            _out(i18n.t("cli.gate_confirm_none"))
+            return 0
         cfg["gates_confirmed"] = True
         paths.save_project_config(project, cfg)
         _out("gates marked as confirmed")
@@ -697,7 +714,7 @@ def cmd_gate(a: argparse.Namespace) -> int:
     if a.action == "baseline":
         results, text = R.gates_baseline(project, rid)
         _out(cap_gate_text(text) if results else "no gates configured → empty baseline recorded (RISK: no automated regression net)")
-        return 0
+        return 1 if G.all_env_error(results) else 0
     if a.action == "run":
         gates = cfg.get("gates") or []
         results = G.run_all(project, gates, paths.run_dir(project, rid) / "evidence", "adhoc", only=a.names or None)
@@ -707,7 +724,8 @@ def cmd_gate(a: argparse.Namespace) -> int:
         comparison, text = R.gates_verify(project, rid, resume=bool(getattr(a, "resume", False)),
                                             full=bool(getattr(a, "all", False)))
         _out(cap_gate_text(text))
-        return 0 if comparison["ok"] else 1
+        rs = (read_json(paths.run_dir(project, rid) / "gates-verify.json") or {}).get("results") or []
+        return 0 if comparison["ok"] and not G.all_env_error(rs) else 1
     if a.action == "last":
         rdir = paths.run_dir(project, rid)
         last = read_json(rdir / "gates-verify.json")
@@ -914,11 +932,14 @@ def cmd_tempo(a: argparse.Namespace) -> int:
     dw = T.dead_wait_share(rows)
     cls = T.classify(st, A.read_rows(project, rid), A.agents_pending(project, rid),
                      reports_due=A.agents_reports_due(project, rid, max_age=3600.0))
+    from . import scorecard as SC
+    card = SC.compute(project, st, rows)
     if a.json:
-        _out(json.dumps({"run": rid, "timings": tm, "dead_wait": dw, "stall": cls, "flags": T.flags(project, st, rows[-200:])},
+        _out(json.dumps({"run": rid, "timings": tm, "dead_wait": dw, "stall": cls, "flags": T.flags(project, st, rows[-200:]),
+                         "scorecard": card},
                         indent=2, ensure_ascii=False, default=str))
         return 0
-    for line in T.report_lines(rid, st, tm, dw, cls, list(dict.fromkeys(T.flags(project, st, rows[-200:]) + cls.get("loops", [])))):
+    for line in T.report_lines(rid, st, tm, dw, cls, list(dict.fromkeys(T.flags(project, st, rows[-200:]) + cls.get("loops", []))), card):
         _out(line)
     return 0
 
@@ -1103,7 +1124,10 @@ def cmd_check(a: argparse.Namespace) -> int:
         raise OrkestraError("unknown check")
     _out(f"{a.cmd} check: " + ("OK" if not problems else "FAIL\n  - " + "\n  - ".join(problems)))
     if a.cmd == "plan" and not problems:
-        note = _large_plan_note(read_text(fdir / "plan.md"))
+        plan_text = read_text(fdir / "plan.md")
+        for n in PP.plan_notes(PP.parse_tasks(plan_text)):
+            _out(n)
+        note = _large_plan_note(plan_text)
         if note:
             _out(note)
     return 0 if not problems else 1
@@ -1638,7 +1662,7 @@ def cmd_setup(a: argparse.Namespace) -> int:
     from . import cursorkit as Cur
     from . import copilotkit as Cop
     if _ASKER:
-        raise OrkestraError("`orkestra setup` changes host configuration: run it from your terminal.")
+        raise OrkestraError(i18n.t("cli.setup_refused_agent"))
     # FR-003: PATH shim always (no engine / declined engines); agent refuse above skips this.
     Cur.ensure_path_shim()
     detected = _setup_detect()
@@ -1855,7 +1879,50 @@ def _claude_copies() -> List[Tuple[str, str, bool]]:
     return out
 
 
+def _claude_plugin_registered() -> bool:
+    """True when Claude Code's plugin registry lists orkestra (read-only; never touches ~/.claude)."""
+    reg = read_json(Path(os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude").expanduser() / "plugins"
+                    / "installed_plugins.json", default={}) or {}
+    plugins = reg.get("plugins") if isinstance(reg, dict) else None
+    return any(str(name).startswith("orkestra@") and entries
+               for name, entries in (plugins.items() if isinstance(plugins, dict) else []))
+
+
+def _repair_damaged_runs(project_arg: Optional[str] = None) -> int:
+    """doctor --repair: restore state.json.prev, else move the run aside to runs/<id>.damaged. Never deletes."""
+    from . import state as ST
+    project = _resolve_project(project_arg, required=False)
+    if project is None:
+        _out(i18n.t("cli.repair_no_project"))
+        return 1
+    rdir = paths.runs_dir(project)
+    damaged = [d for d in sorted(rdir.iterdir()) if d.is_dir() and not ST.is_aside_copy(d.name)
+               and ST.is_damaged(d)] if rdir.is_dir() else []
+    if not damaged:
+        _out(i18n.t("cli.repair_none", project=project))
+        return 0
+    code = 0
+    for d in damaged:
+        try:
+            if ST.restore_prev(d):
+                _out(i18n.t("cli.repair_restored", run_id=d.name))
+                continue
+            dest = d.with_name(d.name + ".damaged")
+            n = 1
+            while dest.exists():
+                n += 1
+                dest = d.with_name(f"{d.name}.damaged{n}")
+            d.rename(dest)
+            _out(i18n.t("cli.repair_moved", run_id=d.name, dest=dest))
+        except OSError as exc:
+            _out(i18n.t("cli.repair_failed", run_id=d.name, error=exc))
+            code = 1
+    return code
+
+
 def cmd_doctor(a: argparse.Namespace) -> int:
+    if getattr(a, "repair", False):
+        return _repair_damaged_runs(getattr(a, "project", None))
     ok = True
 
     def line(status: bool, label: str, detail: str = "") -> None:
@@ -1870,6 +1937,10 @@ def cmd_doctor(a: argparse.Namespace) -> int:
     line(py >= (3, 9), "python >= 3.9", platform.python_version())
     line(shutil.which("git") is not None, "git", shutil.which("git") or i18n.t("cli.doctor_not_found"))
     soft(shutil.which("claude") is not None, "claude", shutil.which("claude") or i18n.t("cli.doctor_claude_missing"))
+    if shutil.which("claude") is not None:
+        registered = _claude_plugin_registered()
+        soft(registered, "claude plugin", i18n.t("cli.doctor_plugin_registered" if registered
+                                                 else "cli.doctor_plugin_missing"))
     for tool in ("node", "npx", "uv", "uvx", "gh", "jq"):
         soft(shutil.which(tool) is not None, tool, shutil.which(tool) or i18n.t("cli.doctor_not_found_optional"))
     config_problem = _global_config_problem()
@@ -1912,7 +1983,9 @@ def cmd_doctor(a: argparse.Namespace) -> int:
               "tool_input": {"command": "git push --force origin main"}, "cwd": str(Path.cwd())}
         cp = subprocess.run([sys.executable, str(disp), "PreToolUse"], input=json.dumps(ev), capture_output=True,
                             encoding="utf-8", errors="replace", timeout=20)
-        line('"deny"' in cp.stdout, "hook self-test (deny force-push)", cp.stdout.strip()[:80] or cp.stderr.strip()[:80])
+        denied = '"deny"' in cp.stdout
+        line(denied, "hook self-test (deny force-push)",
+             i18n.t("cli.doctor_hook_denied") if denied else (cp.stdout.strip()[:80] or cp.stderr.strip()[:80]))
     except Exception as exc:  # pragma: no cover
         line(False, "hook self-test", str(exc))
     from . import cursorkit as CK
@@ -1956,6 +2029,8 @@ def cmd_doctor(a: argparse.Namespace) -> int:
         except Exception:
             soft(False, "claude mcp list", i18n.t("cli.doctor_mcp_failed"))
     _out(i18n.t("cli.doctor_all_passed" if ok else "cli.doctor_some_failed"))
+    if ok:
+        _out(i18n.t("cli.doctor_next"))
     return 0 if ok else 1
 
 

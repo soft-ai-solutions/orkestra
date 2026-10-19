@@ -584,7 +584,7 @@ class TestHintsAndPlanSize(helpers.Sandbox):
                          ["security", "data", "stack-web"])
         self.assertEqual(hints.playbooks_for(["src/components/Cart.tsx", "src/stores/cart.ts"], web), ["stack-web", "ui-flow"])
         self.assertEqual(hints.playbooks_for(["src/screens/Home.tsx"], mob), ["stack-mobile", "ui-flow"])
-        self.assertEqual(hints.playbooks_for(["calc.py", "package.json"], web), ["security"])
+        self.assertEqual(hints.playbooks_for(["calc.py", "package.json"], web), ["security", "stack-python"])
 
     def test_large_plan_note(self):
         from orkestra_core import cli

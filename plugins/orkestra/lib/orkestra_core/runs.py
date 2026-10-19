@@ -391,6 +391,9 @@ def preconditions(project: Path, st: Dict[str, Any], target: str) -> List[str]:
         elif not (last.get("comparison") or {}).get("ok"):
             problems.append("last `orkestra gate verify` shows regressions/failures — fix before review")
         else:
+            env_names = [r["name"] for r in last.get("results") or [] if r.get("env_error") and not r.get("ok")]
+            if env_names and not read_text(fdir / "gates-waiver.md").strip():
+                problems.append(i18n.t("runs.gates_env_waiver_needed", names=", ".join(env_names)))
             newest_change = _newest_change_mtime(project, rdir, changed)
             if newest_change and newest_change > float(last.get("ts", 0)):
                 problems.append("files changed after the last `orkestra gate verify` — run it again")
@@ -940,6 +943,40 @@ def _norm_cmd(c: str) -> str:
     return re.sub(r"\s+", " ", (c or "").strip())
 
 
+# Deterministic red classification, first match wins. "refuse" classes are not a test failing: they need --why.
+# Anchored to collection-level lines (a quoted "SyntaxError" inside an assertion message is not one).
+_RED_REFUSE = re.compile(
+    r"^\s*(?:E\s+)?(?:\w+\.)*(?:SyntaxError|IndentationError)\b|^[\s=]*collected 0 items|^[\s=]*no tests ran"
+    r"|^\s*No tests found|^\s*Ran 0 tests|^\s*(?:testing: warning: )?no tests to run|^\s*Test Suites: 0 total",
+    re.I | re.M)
+# A test that ran and failed. When one is present the red is real whatever else the output says (other packages
+# with no tests, a SyntaxError quoted in a message).
+_RED_REAL_FAIL = re.compile(
+    r"AssertionError|^\s*FAILED\s+\S|^\s*FAIL:|--- FAIL|expect\(received\)|^\s*Tests:[^\n]*\b[1-9]\d* failed"
+    r"|^[\s=]*[^\n]*\b[1-9]\d* failed\b|failures=[1-9]", re.M)
+_RED_CLASSES = (
+    ("infra", re.compile(r"command not found|could not start the command|ENOENT"
+                         r"|connection refused|Permission denied", re.I)),
+    ("missing_symbol", re.compile(r"ModuleNotFoundError|ImportError|No module named|NameError|AttributeError"
+                                  r"|undefined: |is not defined|is not a function|Cannot find module|cannot find symbol"
+                                  r"|no required module provides", re.I)),
+    ("collection_or_syntax", re.compile(r"ERROR collecting|errors? during collection|build failed|\[build failed\]"
+                                        r"|cannot use .* as .* value|expected declaration", re.I)),
+    ("assertion", re.compile(r"AssertionError|assert |FAIL:|FAILED|Expected|expect\(|--- FAIL|\bFAIL\b", re.I)),
+)
+
+
+def classify_red(out: str) -> Tuple[str, bool]:
+    """(reason, refuse) for a failing test run: reason is assertion | missing_symbol | collection_or_syntax | infra.
+    refuse is True when the output shows no test actually failed (syntax error, nothing collected or run)."""
+    if _RED_REFUSE.search(out) and not _RED_REAL_FAIL.search(out):
+        return "collection_or_syntax", True
+    for name, rx in _RED_CLASSES:
+        if rx.search(out):
+            return name, False
+    return "assertion", False
+
+
 def tdd_record(project: Path, run_id: str, tid: str, kind: str, cmd: List[str], why: str = "") -> Dict[str, Any]:
     """Run the test command and record red/green evidence.
 
@@ -1009,8 +1046,18 @@ def tdd_record(project: Path, run_id: str, tid: str, kind: str, cmd: List[str], 
     write_text_atomic(log, f"$ {shell_cmd}\n\n{out}\n[exit {code}]\n")
     # red must be a real test failure: not success, not timeout, not "command not found"/not executable
     ok = (code not in (0, 124, 126, 127)) if kind == "red" else code == 0
+    red_reason = ""
+    if kind == "red" and ok:
+        red_reason, refuse = classify_red(out)
+        if refuse and not why:
+            ok = False
+            red_reason = ""
+            deviations.append("red refused: the output shows no test failing (syntax error, nothing collected or run); "
+                              "fix the test so it runs and fails, or pass --why \"<reason>\"")
     rec: Dict[str, Any] = {"ok": ok, "exit": code, "cmd": shell_cmd, "log": str(log), "at": now_iso(),
                            "tail": tail_lines(out, 25, 2500), "deviations": deviations}
+    if red_reason:
+        rec["reason"] = red_reason
     if kind == "red":
         rec["test_state"] = E.test_files_state(project, rdir_run)
     if owned_elsewhere:                     # changed by a concurrent task that owns them — that task's evidence covers them

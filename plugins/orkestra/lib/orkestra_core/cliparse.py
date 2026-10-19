@@ -20,6 +20,7 @@ SUB_CHECK = ("plan", "trace", "deps", "review", "integrity")                   #
 GLOBAL_VALUE_OPTS = ("-p", "--project", "--run", "--lang")      # global options that take a value: hoisted to the front
 GLOBAL_EQ_PREFIXES = ("--project=", "--run=", "--lang=")
 LANG_CHOICES = ("en", "tr", "auto")
+START_HERE = ("run", "watch", "next", "status", "doctor", "setup")     # the first-run group of `orkestra --help`
 
 
 class CliParseError(Exception):
@@ -140,6 +141,17 @@ _ARGPARSE_ERRORS = (
 )
 
 
+def _unknown_command(value: str, choices: str) -> Optional[str]:
+    """`Unknown command X. Did you mean Y?` for a mistyped subcommand (None: argparse's own sentence stays)."""
+    import difflib
+    name = value.strip("'\"")
+    names = re.findall(r"'([^']+)'", choices)
+    close = difflib.get_close_matches(name, names, n=1)
+    if close:
+        return i18n.t("help.err.unknown_command_hint", value=name, suggestion=close[0])
+    return i18n.t("help.err.unknown_command", value=name)
+
+
 class LocalizedParser(argparse.ArgumentParser):
     """argparse with the `error:` line in the user's language (usage and help already follow it). Same exit code (2)."""
 
@@ -150,6 +162,8 @@ class LocalizedParser(argparse.ArgumentParser):
             found = pattern.match(message)
             if found:
                 text = i18n.t("help.err." + key, **found.groupdict())
+                if key == "invalid_choice" and found.group("arg").startswith("<command>"):
+                    text = _unknown_command(found.group("value"), found.group("choices")) or text
                 break
         self.exit(2, f"{self.prog}: {i18n.t('help.error_word')}: {text}\n")
 
@@ -161,6 +175,23 @@ class _Formatter(argparse.RawDescriptionHelpFormatter):
         if prefix is None:
             prefix = i18n.t("help.usage") + " "
         super().add_usage(usage, actions, groups, prefix)
+
+    def _format_action(self, action: Any) -> str:
+        """The command list of `orkestra --help` in two groups: START_HERE first, then the rest (Advanced)."""
+        if not isinstance(action, argparse._SubParsersAction) or not getattr(action, "_orkestra_grouped", False):
+            return super()._format_action(action)
+        subs = list(action._get_subactions())
+        first = [x for name in START_HERE for x in subs if x.dest == name]
+        rest = [x for x in subs if x.dest not in START_HERE]
+        out = ""
+        for key, items in (("help.group_start", first), ("help.group_advanced", rest)):
+            if not items:
+                continue
+            out += " " * self._current_indent + i18n.t(key) + "\n"
+            self._indent()
+            out += "".join(super(_Formatter, self)._format_action(x) for x in items)
+            self._dedent()
+        return out
 
 
 def _retitle(parser: argparse.ArgumentParser) -> None:
@@ -191,6 +222,7 @@ def build_parser(parser_class: Any = LocalizedParser, *, localize: bool = True) 
     if localize:
         sub_kw["title"] = h("help.commands")
     sub = p.add_subparsers(**sub_kw)
+    sub._orkestra_grouped = localize                    # type: ignore[attr-defined]
 
     def sp_(name: str, **kw: Any) -> argparse.ArgumentParser:
         kw.setdefault("allow_abbrev", False)
@@ -209,7 +241,8 @@ def build_parser(parser_class: Any = LocalizedParser, *, localize: bool = True) 
     sp_("context")
     sp_("init")
     s = sp_("start")
-    s.add_argument("--title", required=True)
+    s.add_argument("text", nargs="?", help=h("help.opt.start_text"))
+    s.add_argument("--title", help=h("help.opt.start_title"))
     s.add_argument("--request")
     s.add_argument("--request-file")
     s.add_argument("--size", default="auto", choices=["auto", "XS", "S", "M", "L"],
@@ -346,7 +379,8 @@ def build_parser(parser_class: Any = LocalizedParser, *, localize: bool = True) 
                    help=h("help.opt.mcp_only"))
     s = sp_("setup")
     s.add_argument("--yes", "-y", action="store_true", help=h("help.opt.setup_yes"))
-    sp_("doctor")
+    s = sp_("doctor")
+    s.add_argument("--repair", action="store_true", help=h("help.opt.doctor_repair"))
     sp_("version")
     s = sp_("lang")
     s.add_argument("value", nargs="?", default="show", type=lang_or_show_localized if localize else lang_or_show,

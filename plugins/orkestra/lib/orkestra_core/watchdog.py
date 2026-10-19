@@ -60,6 +60,20 @@ def _open_runs() -> List[Dict[str, Any]]:
     return out
 
 
+def damaged_runs() -> List[Dict[str, Any]]:
+    """Runs whose state.json exists but is unreadable (they used to vanish from the scan silently)."""
+    from .monitor import _project_dirs
+    out = []
+    for proj in _project_dirs(paths.workspace_root()):
+        rdir = paths.runs_dir(proj)
+        if not rdir.is_dir():
+            continue
+        for d in sorted(rdir.iterdir()):
+            if d.is_dir() and not ST.is_aside_copy(d.name) and ST.is_damaged(d):
+                out.append({"project": proj, "run_id": d.name, "dir": d, "has_prev": (d / "state.json.prev").is_file()})
+    return out
+
+
 def scan(now: Optional[float] = None, cfg: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     now = time.time() if now is None else now
     cfg = cfg or paths.global_config()
@@ -459,8 +473,12 @@ def main(once: bool = True, as_json: bool = False, dry_run: bool = False, quiet:
         sys.stdout.write(json.dumps(views, ensure_ascii=False, indent=2, default=str) + "\n")
         return 0
     shown = [v for v in views if not quiet or v["notify"] or v["stall"]["cls"] in NOTIFY_CLASSES]
-    if not views and not quiet:
+    damaged = damaged_runs()
+    if not views and not damaged and not quiet:
         sys.stdout.write(t("watchdog.no_open_runs") + "\n")
+    for d in ([] if quiet else damaged):
+        key = "watchdog.damaged_run" if d.get("has_prev") else "watchdog.damaged_run_noprev"
+        sys.stdout.write(t(key, project=d["project"].name, run_id=d["run_id"]) + "\n")
     for v in shown:
         sys.stdout.write(v["message"] + "\n")
         if v["stall"].get("loops"):

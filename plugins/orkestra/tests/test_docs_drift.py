@@ -9,7 +9,7 @@ What is checked, and against what:
     same links, same set of CLI commands, a language switch link at the top;
   * facts a reader relies on come from the code: the phase list, the guard names, the config defaults, the version;
   * the English and Turkish architecture pages (`docs/architecture.html`, `docs/orkestra-mimari.html`) keep the same
-    structure, the root copy of the Turkish page equals the one in `docs/`, and their headline numbers come from the code;
+    structure (the Turkish page has no second copy at the repo root), and their headline numbers come from the code;
   * the GitHub community files exist and say what they must;
   * the quickstart commands run with `--help` (they exist and parse), in a sandbox.
 
@@ -48,7 +48,6 @@ COMMAND_DOCS = [README_EN, README_TR, ONBOARDING_EN, ONBOARDING_TR, ROOT / "ORKE
 LINK_DOCS = COMMAND_DOCS + [ROOT / "CODE_OF_CONDUCT.md", ROOT / "CHANGELOG.md", ROOT / "THIRD_PARTY_NOTICES.md",
                             ROOT / "integrations" / "openclaw" / "CONTRACT.md",
                             ROOT / "integrations" / "openclaw" / "CONTRACT.tr.md"]
-HTML_ROOT_TR = ROOT / "orkestra-mimari.html"
 HTML_DOCS_TR = ROOT / "docs" / "orkestra-mimari.html"
 HTML_DOCS_EN = ROOT / "docs" / "architecture.html"
 
@@ -377,7 +376,7 @@ class TestLinksResolve(unittest.TestCase):
         self.assertEqual(github_slug("FAQ and troubleshooting"), "faq-and-troubleshooting")
 
     def test_html_pages_link_to_each_other_and_in_page_anchors_resolve(self):
-        for page in (HTML_ROOT_TR, HTML_DOCS_TR, HTML_DOCS_EN):
+        for page in (HTML_DOCS_TR, HTML_DOCS_EN):
             html = read(page)
             ids = set(re.findall(r'\sid="([^"]+)"', html))
             for frag in re.findall(r'href="#([^"]+)"', html):
@@ -385,7 +384,6 @@ class TestLinksResolve(unittest.TestCase):
             for href in re.findall(r'href="([^"#:]+\.html)"', html):
                 self.assertTrue((page.parent / href).is_file(), f"{page.relative_to(ROOT)}: {href} is missing")
         self.assertIn('href="architecture.html" hreflang="en"', read(HTML_DOCS_TR))
-        self.assertIn('href="docs/architecture.html" hreflang="en"', read(HTML_ROOT_TR))
         self.assertIn('href="orkestra-mimari.html" hreflang="tr"', read(HTML_DOCS_EN))
 
 
@@ -482,6 +480,13 @@ class TestOnboardingMirror(MirrorBase, unittest.TestCase):
 # --------------------------------------------------------------------------------------------- facts from the code
 
 class TestFactsComeFromTheCode(unittest.TestCase):
+    def test_the_one_page_reference_names_every_engine_not_only_claude(self):
+        for doc, lead in ((ROOT / "ORKESTRA.md", "Orkestra is a plugin for"), (ROOT / "ORKESTRA.tr.md", "Orkestra, Claude Code")):
+            head = read(doc)[:1500]
+            self.assertIn(lead, head, doc.name)
+            for engine in ("Cursor", "Copilot"):
+                self.assertIn(engine, head.split("## ", 2)[1] if "## " in head else head, doc.name)
+
     def test_version_is_one_number_everywhere(self):
         manifest = json.loads(read(ROOT / ".claude-plugin" / "marketplace.json"))
         plugin = json.loads(read(helpers.PLUGIN / ".claude-plugin" / "plugin.json"))
@@ -497,7 +502,7 @@ class TestFactsComeFromTheCode(unittest.TestCase):
             found = banner.findall(read(doc)[:2500])
             self.assertTrue(found, f"{doc.name} states no version in its header")
             self.assertEqual(set(found), {__version__}, f"{doc.name} names a version other than {__version__}")
-        for page in (HTML_ROOT_TR, HTML_DOCS_TR, HTML_DOCS_EN):
+        for page in (HTML_DOCS_TR, HTML_DOCS_EN):
             meta = re.search(r'<p class="meta">(.*?)</p>', read(page), re.S)
             self.assertIsNotNone(meta, page.name)
             self.assertEqual(set(banner.findall(meta.group(1))), {__version__}, page.name)
@@ -592,9 +597,8 @@ class TestArchitecturePages(unittest.TestCase):
             return [(p.count("<tr"), p.count("<li"), p.count('class="chip')) for p in parts]
         self.assertEqual(per_section(HTML_DOCS_EN), per_section(HTML_DOCS_TR))
 
-    def test_the_two_turkish_copies_differ_only_in_the_link_to_the_english_page(self):
-        root = read(HTML_ROOT_TR).replace("docs/architecture.html", "architecture.html")
-        self.assertEqual(root, read(HTML_DOCS_TR))
+    def test_the_turkish_architecture_page_has_a_single_copy(self):
+        self.assertFalse((ROOT / "orkestra-mimari.html").exists(), "the root copy was removed; docs/ holds the only one")
 
     def test_language_attributes_and_titles(self):
         self.assertIn('<html lang="en">', read(HTML_DOCS_EN))
@@ -605,7 +609,7 @@ class TestArchitecturePages(unittest.TestCase):
         agents = sorted(p.stem for p in (helpers.PLUGIN / "agents").glob("*.md"))
         hooks = json.loads(read(helpers.PLUGIN / "hooks" / "hooks.json"))["hooks"]
         engines = {"claude", "cursor", "copilot"}
-        for page in (HTML_DOCS_EN, HTML_DOCS_TR, HTML_ROOT_TR):
+        for page in (HTML_DOCS_EN, HTML_DOCS_TR):
             html = read(page)
             stats = [int(n) for n in re.findall(r'<div class="stat"><b>(\d+)</b>', html)]
             self.assertEqual(stats, [len(state.PHASES), len(agents), len(hooks), len(engines)], page.name)
@@ -616,7 +620,7 @@ class TestArchitecturePages(unittest.TestCase):
 
     def test_no_em_dash_in_the_new_english_page_and_no_stale_test_counts(self):
         self.assertNotIn("—", read(HTML_DOCS_EN))
-        for page in (HTML_DOCS_EN, HTML_DOCS_TR, HTML_ROOT_TR):
+        for page in (HTML_DOCS_EN, HTML_DOCS_TR):
             html = read(page)
             self.assertNotRegex(html, r"\b3[0-9]{2} \+ 16\b", f"{page.name}: a hard-coded test count that drifts")
             self.assertNotRegex(html, r"\b344 (test|tests)\b", page.name)
@@ -750,7 +754,7 @@ class TestReliabilityDocs(unittest.TestCase):
 
     def test_the_stall_tables_of_the_architecture_pages_state_the_current_predicates(self):
         from orkestra_core import tempo
-        for page in (HTML_DOCS_EN, HTML_DOCS_TR, HTML_ROOT_TR):
+        for page in (HTML_DOCS_EN, HTML_DOCS_TR):
             html = read(page)
             self.assertIn(f"{tempo.DUE_REPORT_SECONDS} sn" if page != HTML_DOCS_EN else f"{tempo.DUE_REPORT_SECONDS} s", html)
             self.assertNotIn("90 sn önce bitti", html)
@@ -977,12 +981,13 @@ class TestQuickstartCommandsRun(unittest.TestCase):
     def test_quickstart_in_the_readme_is_the_documented_three_commands(self):
         text = read(README_EN)
         section = text.split("## Quickstart", 1)[1].split("\n## ", 1)[0]
-        first_block = split_markdown(section)[0][0][1]
-        cmds = [ln.split("#")[0].strip() for ln in first_block if ln.strip()]
+        blocks = split_markdown(section)[0]
+        cmds = [ln.split("#")[0].strip() for _, block in blocks[:2] for ln in block if ln.strip()]
         self.assertEqual(cmds[0], "git clone https://github.com/soft-ai-solutions/orkestra.git")
         self.assertEqual(cmds[1], "cd orkestra")
-        self.assertTrue(cmds[2].endswith("bin/orkestra setup"))
-        self.assertTrue(cmds[3].endswith("bin/orkestra doctor"))
+        self.assertEqual(cmds[2], "python3 install.py --dry-run")          # step 0: preview, writes nothing
+        self.assertTrue(cmds[3].endswith("bin/orkestra setup"))
+        self.assertTrue(cmds[4].endswith("bin/orkestra doctor"))
 
 
 class TestInstallerClaims(unittest.TestCase):
