@@ -22,7 +22,7 @@ Goal: the user gets the value, the proof, and a project that remembers.
 5. `orkestra phase next` → done. Moving to `done` automatically removes regenerable tool dumps under the project
    (`test-results`, `playwright-report`, `android/**/build`, …). Manual: `orkestra clean -p <project>` (or
    `--dry-run`). Opt out: `"cleanup_artifacts": false` in `~/.orkestra/config.json` or the project's
-   `.orkestra/config.json`.
+   `.orkestra/config.json`. Runs left open and idle for 24h+ in any project: `orkestra clear` (`--dry-run`).
 6. Final chat message (in the user's language, ≤ 15 lines): what was delivered + value, evidence (only facts from the evidence block),
    how to try, the top assumptions and the DEFERRED/UNVERIFIED rows (say so plainly), path to report.md, suggested commit message, and that
    nothing was committed or pushed.

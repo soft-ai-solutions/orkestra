@@ -1233,6 +1233,33 @@ def cmd_clean(a: argparse.Namespace) -> int:
     return 1 if errors and not removed else 0
 
 
+def cmd_clear(a: argparse.Namespace) -> int:
+    """Close runs idle for a long time (default 24h, any open status) and drop registry entries they leave behind."""
+    from . import clear as CL
+    if a.older_than < 0:
+        raise OrkestraError("orkestra clear: --older-than must be 0 or more hours")
+    res = CL.clear(older_than_hours=a.older_than, dry_run=bool(a.dry_run))
+    if a.json:
+        _out(json.dumps(res, indent=2, ensure_ascii=False, default=str))
+        return 1 if res["errors"] else 0
+    closed, dropped, errors = res["closed"], res["dropped"], res["errors"]
+    if not closed and not dropped and not errors:
+        _out(i18n.t("cli.clear_none", hours=f"{a.older_than:g}", kept=len(res["kept"])))
+        return 0
+    mode = i18n.t("cli.clean_mode_dry") if a.dry_run else i18n.t("cli.clean_mode_done")
+    _out(i18n.t("cli.clear_header", mode=mode, runs=len(closed), entries=len(dropped), hours=f"{a.older_than:g}"))
+    for r in closed:
+        _out(i18n.t("cli.clear_run", project=Path(r["project"]).name, run=r["run_id"], status=r["status"],
+                    phase=r["phase"], idle=T.dur(r["idle"])))
+    for d in dropped:
+        _out(i18n.t("cli.clear_entry", kind=d["kind"], path=paths.display_path(d["path"])))
+    for e in errors:
+        _out(i18n.t("cli.clean_error", path=e["target"], error=e["error"]))
+    if res["kept"]:
+        _out(i18n.t("cli.clear_kept", count=len(res["kept"])))
+    return 1 if errors else 0
+
+
 def cmd_rollback(a: argparse.Namespace) -> int:
     project = _resolve_project(a.project)
     assert project is not None
@@ -2061,7 +2088,7 @@ HANDLERS = {
     "phase": cmd_phase, "await": cmd_status_change, "block": cmd_status_change, "unblock": cmd_status_change,
     "pause": cmd_status_change, "abort": cmd_status_change, "gate": cmd_gate, "tdd": cmd_tdd, "task": cmd_task,
     "brief": cmd_brief, "plan": cmd_check, "trace": cmd_check, "deps": cmd_check, "review": cmd_check,
-    "changes": cmd_changes, "diff": cmd_diff, "rollback": cmd_rollback, "clean": cmd_clean, "memory": cmd_memory,
+    "changes": cmd_changes, "diff": cmd_diff, "rollback": cmd_rollback, "clean": cmd_clean, "clear": cmd_clear, "memory": cmd_memory,
     "playbook": cmd_playbook, "template": cmd_template, "doctor": cmd_doctor, "demo": cmd_demo, "pi": cmd_pi,
     "watch": cmd_watch, "dashboard": cmd_dashboard,
     "evidence": cmd_evidence, "integrity": cmd_integrity, "report": cmd_report,
