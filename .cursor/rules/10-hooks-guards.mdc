@@ -1,0 +1,16 @@
+---
+description: Hook and guard changes (latency budget, decision corpus)
+globs: plugins/orkestra/hooks/**,plugins/orkestra/lib/orkestra_core/{hookmain,hookboot,guards,shellparse,shellcwd}.py,plugins/orkestra/tests/guard_corpus.py
+---
+# Hooks and guards
+
+- A hook runs on every tool call. No new top-level import in `hookmain.py`, `hookboot.py`, `guards.py`; import inside
+  the function or use `lazy.LazyModule`.
+- Time tests use CPU time or an injected clock, never wall-clock.
+- Strictness is the contract: a guard may become more permissive only for a documented false positive, with a test that
+  the true positive is still denied.
+- New guard case: on a clean tree `python3 guard_corpus.py --check` must print `0 differences`; append to the END of
+  `BASH_MULTI` (or add to `FILE_PATHS`/`MCP`/`OTHER_TOOLS`); `--write`; read `git diff --stat tests/data/guard_decisions.json`
+  (only added rows). `--write` is never a way to fix a failing replay.
+- Run `test_hook_latency`, `test_guards`, `test_guards2`.
+- Loops need a cap and a test of the cap; waits need a deadline; "stuck" is a pure predicate (see `fastwatch.py`).

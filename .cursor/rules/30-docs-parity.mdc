@@ -1,0 +1,10 @@
+---
+description: Bilingual docs must mirror each other
+globs: README*.md,ONBOARDING*.md,ORKESTRA*.md,docs/**,CHANGELOG.md
+---
+# Docs
+
+- `README`, `ONBOARDING`, `ORKESTRA` each have an `.md` and a `.tr.md`: same sections, commands, order. Change both together.
+- Name only commands/flags that exist; `tests/test_docs_drift.py` checks them against the real parser, plus links, anchors and version strings.
+- Architecture pages: `docs/architecture.html` (EN), `docs/orkestra-mimari.html` (TR).
+- User-visible change: add a line under `## Unreleased` in `CHANGELOG.md` (the release script refuses an empty section).

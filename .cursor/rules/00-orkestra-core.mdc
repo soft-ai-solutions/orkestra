@@ -1,0 +1,18 @@
+---
+description: Orkestra repo core rules (always on)
+alwaysApply: true
+---
+# Orkestra core
+
+Canonical: `AGENTS.md`, `CONTRIBUTING.md`. This file only restates the traps.
+
+- Stdlib-only Python in `plugins/orkestra/` and `bridge/`. No new pip/npm deps.
+- `plugins/orkestra/cursor/` is generated: edit Claude sources, then `python3 plugins/orkestra/bin/orkestra cursor build`.
+- Argv parsing lives only in `lib/orkestra_core/cliparse.py`.
+- Before editing `hooks/`, `lib/orkestra_core/` guards or `agents/`, run `python3 plugins/orkestra/bin/orkestra watch`.
+  If a run is open, stop and work on a branch or copy.
+- Every behaviour change ships with a test that fails without it. Never skip or delete tests.
+- No commit, push, deploy or release unless asked in that message.
+- Model-facing text is English. Human-facing text goes through `i18n.t(...)` (EN + TR). No em dash in new text.
+- Never touch sibling projects under the workspace root or `~/.orkestra`.
+- Gates: `python3 -m unittest discover -s plugins/orkestra/tests -q` and `python3 -m unittest discover -s bridge/tests -q`.

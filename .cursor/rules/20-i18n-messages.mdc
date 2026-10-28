@@ -1,0 +1,12 @@
+---
+description: Human-facing text, catalogs, protocol tokens
+globs: plugins/orkestra/lib/orkestra_core/messages/**,plugins/orkestra/templates/**,plugins/orkestra/lib/orkestra_core/{i18n,intent}.py,bridge/ui/i18n.js
+---
+# Text and localization
+
+- Key `"<area>.<name>"` in BOTH `EN` and `TR` of the area module; same `{fields}`; no Turkish letters in EN; TR is a real translation.
+- Read with `i18n.t(...)`; pass values as fields, never glue translated pieces.
+- Protocol tokens (`SECTIONS`, `PROMPTS`, `templates/en|tr`) only grow: add a spelling, never remove one. Keep `templates/en` and `templates/tr` identical in placeholders and table shape.
+- `intent.py` vocabulary only grows.
+- New tests set `ORKESTRA_LANG` explicitly (`en` and `tr`); the suite default is `tr`.
+- Narrow gate: `cd plugins/orkestra/tests && python3 -m unittest test_i18n test_docs_drift -q`.

@@ -1,0 +1,8 @@
+---
+description: Generated Cursor tree is read-only
+globs: plugins/orkestra/cursor/**
+---
+# Generated tree
+
+Do not hand-edit anything here. Edit `plugins/orkestra/{agents,skills,hooks}` and run
+`python3 plugins/orkestra/bin/orkestra cursor build`. A test fails when this tree is stale.
