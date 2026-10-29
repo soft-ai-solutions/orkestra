@@ -26,6 +26,7 @@ dependencies = []
 Homepage = "https://github.com/soft-ai-solutions/orkestra"
 Repository = "https://github.com/soft-ai-solutions/orkestra"
 Changelog = "https://github.com/soft-ai-solutions/orkestra/blob/main/CHANGELOG.md"
+Funding = "https://buymeacoffee.com/firatkocabay/membership"
 
 [project.scripts]
 orkestra = "orkestra_cli:main"

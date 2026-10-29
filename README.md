@@ -605,7 +605,14 @@ is pinned to Turkish output (`ORKESTRA_LANG=tr`) for its older assertions; new t
   ([Türkçe](docs/orkestra-mimari.html)); [docs/README.md](docs/README.md) indexes the docs.
 - [ONBOARDING.md](ONBOARDING.md): first-time setup on every system ([Türkçe](ONBOARDING.tr.md)).
 - [CONTRIBUTING.md](CONTRIBUTING.md) · [SECURITY.md](SECURITY.md) · [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) ·
-  [AGENTS.md](AGENTS.md) for agents editing this repository · [CHANGELOG.md](CHANGELOG.md)
+  [AGENTS.md](AGENTS.md) for agents editing this repository · [CHANGELOG.md](CHANGELOG.md) · [SUPPORT.md](SUPPORT.md)
+
+## Support
+
+Orkestra stays free under the MIT License. If it helps your work, you can fund ongoing development
+(engines, guards, EN/TR docs) with a
+[Buy Me a Coffee membership](https://buymeacoffee.com/firatkocabay/membership)
+without changing the licence or adding telemetry. Details: [SUPPORT.md](SUPPORT.md).
 
 ## Credits and licences
 

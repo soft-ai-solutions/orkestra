@@ -9,3 +9,6 @@ contact_links:
   - name: Troubleshooting / Sorun giderme
     url: https://github.com/soft-ai-solutions/orkestra/blob/main/README.md#faq-and-troubleshooting
     about: Run `orkestra doctor` first. The FAQ covers the common installation and PATH problems (Türkçe README.tr.md içinde).
+  - name: Support Orkestra / Orkestra'yı destekle
+    url: https://buymeacoffee.com/firatkocabay/membership
+    about: Optional membership funding for ongoing development. The tool stays MIT and free. See SUPPORT.md.

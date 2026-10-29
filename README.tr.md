@@ -603,7 +603,14 @@ kapsar.
   ([English](docs/architecture.html)); [docs/README.md](docs/README.md) belgeleri listeler.
 - [ONBOARDING.tr.md](ONBOARDING.tr.md): her sistemde ilk kurulum ([English](ONBOARDING.md)).
 - [CONTRIBUTING.md](CONTRIBUTING.md) · [SECURITY.md](SECURITY.md) · [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) ·
-  bu depoyu düzenleyen ajanlar için [AGENTS.md](AGENTS.md) · [CHANGELOG.md](CHANGELOG.md)
+  bu depoyu düzenleyen ajanlar için [AGENTS.md](AGENTS.md) · [CHANGELOG.md](CHANGELOG.md) · [SUPPORT.md](SUPPORT.md)
+
+## Destek
+
+Orkestra MIT Lisansı ile ücretsiz kalır. İşinize yarıyorsa, lisans veya telemetri değiştirmeden
+süregelen geliştirmeyi (motorlar, guard'lar, EN/TR belgeler)
+[Buy Me a Coffee üyeliği](https://buymeacoffee.com/firatkocabay/membership)
+ile destekleyebilirsiniz. Ayrıntı: [SUPPORT.md](SUPPORT.md).
 
 ## Kaynaklar ve lisanslar
 

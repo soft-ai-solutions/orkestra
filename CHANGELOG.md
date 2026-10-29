@@ -6,6 +6,12 @@ Orkestra now serves people in English and Turkish (English is the default), runs
 with Python 3.9 to 3.14, and its repository documentation is available in both languages. Entries up to 1.6.0 below
 were written in Turkish and are kept as they were.
 
+### Funding
+- **Support the project:** `.github/FUNDING.yml` enables the GitHub Sponsor button (Buy Me a Coffee),
+  [SUPPORT.md](SUPPORT.md) documents help and membership links, both READMEs gain a Support / Destek section, and
+  `pyproject.toml` carries a Funding URL to the
+  [membership page](https://buymeacoffee.com/firatkocabay/membership). Cover assets live under `docs/bmc-membership/`.
+
 ### Clearing idle runs
 - **`orkestra clear`:** aborts every open run (blocked, paused, waiting, active) that nothing has touched for 24 hours
   (`--older-than HOURS`) in all projects, unless an agent process for its sessions is still alive, and drops registry

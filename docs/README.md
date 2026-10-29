@@ -14,6 +14,7 @@ English first, Türkçe aşağıda. The documents for users exist in both langua
 | Connect Telegram, n8n or OpenClaw | the Bridge section of the [README](../README.md#bridge-telegram-n8n-and-openclaw) and the [OpenClaw contract](../integrations/openclaw/CONTRACT.md) |
 | Switch the language | the Language section of the [README](../README.md#language) |
 | Contribute code, text or a translation | [CONTRIBUTING.md](../CONTRIBUTING.md) (English only) |
+| Fund ongoing development (membership) | [SUPPORT.md](../SUPPORT.md) (English only) · [Buy Me a Coffee](https://buymeacoffee.com/firatkocabay/membership) |
 | Report a vulnerability | [SECURITY.md](../SECURITY.md) (English only; you may write in Turkish) |
 | See what changed | [CHANGELOG.md](../CHANGELOG.md) (English from the Unreleased entry on; older entries are Turkish) |
 | Edit this repository as an agent | [AGENTS.md](../AGENTS.md) (English only) |
@@ -30,6 +31,7 @@ English first, Türkçe aşağıda. The documents for users exist in both langua
 | Telegram, n8n ya da OpenClaw bağlamak | [README](../README.tr.md#bridge-telegram-n8n-ve-openclaw) içindeki Bridge bölümü ve [OpenClaw sözleşmesi](../integrations/openclaw/CONTRACT.tr.md) |
 | Dili değiştirmek | [README](../README.tr.md#dil) içindeki Dil bölümü |
 | Kod, metin ya da çeviri ile katkı vermek | [CONTRIBUTING.md](../CONTRIBUTING.md) (İngilizce) |
+| Süregelen geliştirmeyi finanse etmek (üyelik) | [SUPPORT.md](../SUPPORT.md) (İngilizce) · [Buy Me a Coffee](https://buymeacoffee.com/firatkocabay/membership) |
 | Güvenlik açığı bildirmek | [SECURITY.md](../SECURITY.md) (İngilizce; Türkçe yazabilirsin) |
 | Neyin değiştiğini görmek | [CHANGELOG.md](../CHANGELOG.md) |
 | Dağıtım, güvenlik varsayılanları, maliyet ve gizlilik kararlarını ve yapılmayanları okumak | [decisions.tr.md](decisions.tr.md) |

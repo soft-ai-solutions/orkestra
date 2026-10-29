@@ -461,16 +461,23 @@ class MirrorBase:
 class TestReadmeMirror(MirrorBase, unittest.TestCase):
     en, tr = README_EN, README_TR
 
-    def test_sixteen_sections_and_the_required_limits_heading(self):
-        # sixteen since "Reliability and speed" / "Güvenilirlik ve hız" was added after "Watching runs"
+    def test_seventeen_sections_and_the_required_limits_heading(self):
+        # seventeen since Support / Destek was added before Credits; Reliability stays before Project memory
         for doc in (README_EN, README_TR):
-            self.assertEqual(sum(1 for lvl, _ in headings(read(doc)) if lvl == 2), 16, doc.name)
+            self.assertEqual(sum(1 for lvl, _ in headings(read(doc)) if lvl == 2), 17, doc.name)
         self.assertIn("## Limits you should know", read(README_EN))
+        self.assertIn("## Support", read(README_EN))
+        self.assertIn("## Destek", read(README_TR))
         for doc, title, before in ((README_EN, "Reliability and speed", "Project memory"),
-                                   (README_TR, "Güvenilirlik ve hız", "Proje hafızası")):
+                                   (README_TR, "Güvenilirlik ve hız", "Proje hafızası"),
+                                   (README_EN, "Support", "Credits and licences"),
+                                   (README_TR, "Destek", "Kaynaklar ve lisanslar")):
             titles = [t for lvl, t in headings(read(doc)) if lvl == 2]
             self.assertIn(title, titles, doc.name)
             self.assertEqual(titles.index(title) + 1, titles.index(before), f"{doc.name}: {title} sits before {before}")
+        for doc in (README_EN, README_TR):
+            self.assertIn("buymeacoffee.com/firatkocabay/membership", read(doc))
+            self.assertIn("SUPPORT.md", read(doc))
 
 
 class TestOnboardingMirror(MirrorBase, unittest.TestCase):
@@ -881,8 +888,24 @@ class TestCommunityFiles(unittest.TestCase):
         self.assertRegex(cfg, r"(?m)^blank_issues_enabled:\s*false\s*$")
         self.assertIn("security/advisories/new", cfg)
         self.assertIn("SECURITY.md", cfg)
+        self.assertIn("buymeacoffee.com/firatkocabay/membership", cfg)
+        allowed = (
+            "https://github.com/soft-ai-solutions/orkestra/",
+            "https://buymeacoffee.com/firatkocabay",
+        )
         for url in re.findall(r"url:\s*(\S+)", cfg):
-            self.assertTrue(url.startswith("https://github.com/soft-ai-solutions/orkestra/"), url)
+            self.assertTrue(url.startswith(allowed), url)
+
+    def test_funding_yml_points_at_buy_me_a_coffee(self):
+        funding = read(self.GH / "FUNDING.yml")
+        self.assertRegex(funding, r"(?m)^buy_me_a_coffee:\s*firatkocabay\s*$")
+
+    def test_support_md_names_membership_and_help_paths(self):
+        support = read(ROOT / "SUPPORT.md")
+        self.assertNotIn("\u2014", support)
+        for needle in ("buymeacoffee.com/firatkocabay/membership", "SECURITY.md", "CONTRIBUTING.md",
+                       "orkestra doctor", "docs/bmc-membership/", "FUNDING.yml"):
+            self.assertIn(needle, support)
 
     def test_pull_request_template_carries_the_gates(self):
         pr = read(self.GH / "PULL_REQUEST_TEMPLATE.md")
@@ -1063,6 +1086,8 @@ class TestDecisionRecord(unittest.TestCase):
         index = read(ROOT / "docs" / "README.md")
         self.assertIn("](decisions.md)", index)
         self.assertIn("](decisions.tr.md)", index)
+        self.assertIn("](../SUPPORT.md)", index)
+        self.assertIn("buymeacoffee.com/firatkocabay/membership", index)
 
 
 if __name__ == "__main__":
