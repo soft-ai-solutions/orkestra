@@ -61,6 +61,8 @@ def is_quiet(name: str, ev: Any, raw: str) -> bool:
         try:
             if os.path.exists(paths.sessions_dir() / f"{state._safe(sid)}.json"):
                 return False
+            if os.path.exists(paths.stops_dir() / f"{state._safe(sid)}.json"):
+                return False                            # stopped from the dashboard: the full hook refuses the call
         except (OSError, ValueError):
             return False
     return True

@@ -83,7 +83,7 @@ In a terminal (`python3 $ORKESTRA_ROOT/plugins/orkestra/bin/orkestra …` or `./
 
 | Command | Job |
 |---|---|
-| `watch` · `dashboard --open` | Live view (terminal · http://127.0.0.1:47616). Read-only. |
+| `watch` · `dashboard --open` | Live view (terminal · http://127.0.0.1:47616). The page shows risky agent actions and can pause or abort a run (`--read-only` hides the controls). |
 | Bridge chat UI | http://127.0.0.1:47615/ · pick the project and Claude/Cursor/Copilot; follow the phase map, the agent network, tasks and the latest hook activity. |
 | `status -p <project>` · `context` | The run's phase, tasks, evidence gaps. |
 | `next -p <project>` | The single next step. The same state always gives the same answer. |

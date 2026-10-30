@@ -1,9 +1,12 @@
 {
   "id": "orkestra-bridge",
   "name": "Orkestra bridge",
-  "description": "Telegram → orkestra: /run (/yap), /runs (/durum), /cancel (/iptal), reply-to-answer and job notifications.",
+  "description": "Telegram → orkestra: /run (/yap), /runs (/durum), /cancel (/iptal), plain-language requests through the orkestra_run tool, reply-to-answer and job notifications.",
   "activation": {
     "onStartup": true
+  },
+  "contracts": {
+    "tools": ["orkestra_run", "orkestra_status"]
   },
   "configSchema": {
     "type": "object",

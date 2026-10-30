@@ -94,6 +94,40 @@ function approvalWord(option) {
   return rest.every((w) => APPROVAL_FILLER.has(w)) ? word : null;
 }
 
+/** A name folded for matching a project folder: "Namaz Vakitleri", "namaz_vakitleri" and "NAMAZ-VAKITLERI" are one. */
+export function projectKey(name) {
+  return fold(name).replace(/[^a-z0-9]+/g, "");
+}
+
+/**
+ * The project folder a spoken or typed name means, among the folders the bridge may start.
+ * `{ project }` when the name is a folder, or exactly one folder folds to the same key; otherwise `{ suggestions }`
+ * (up to 5 folders whose key contains the name's key or is contained in it). Nothing is ever guessed beyond that.
+ * @param {string} name
+ * @param {Array<string | { name: string }>} projects
+ * @returns {{ project: string } | { suggestions: string[] }}
+ */
+export function resolveProject(name, projects) {
+  const list = (projects ?? []).map((p) => (typeof p === "string" ? p : p?.name)).filter(Boolean);
+  const raw = String(name ?? "").trim();
+  if (list.includes(raw)) {
+    return { project: raw };
+  }
+  const key = projectKey(raw);
+  if (!key) {
+    return { suggestions: [] };
+  }
+  const same = list.filter((p) => projectKey(p) === key);
+  if (same.length === 1) {
+    return { project: same[0] };
+  }
+  const near = same.length ? same : list.filter((p) => {
+    const k = projectKey(p);
+    return k.length >= 3 && (k.includes(key) || key.includes(k));
+  });
+  return { suggestions: near.slice(0, 5) };
+}
+
 /**
  * A bare option letter ("b", "B", "b)", "(b)") becomes "b) <option text>" when the quoted
  * question lists that option, so the answer stays unambiguous. Anything else is sent as typed.

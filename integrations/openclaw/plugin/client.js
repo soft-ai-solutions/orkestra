@@ -65,6 +65,8 @@ export function createOrkestraClient({
     statusAll: () => call(["status"]),
     /** Stops the latest open job of this chat. */
     cancel: (chatId) => call(["cancel", "--chat-id", chatId]),
+    /** The project folders the bridge may start (its allowlist applied). */
+    projects: () => call(["projects"]),
   };
 }
 

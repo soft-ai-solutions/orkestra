@@ -83,6 +83,22 @@ When a job asks a question, waits for approval, finishes or is blocked, the brid
   live{level,text}, tasks_done, tasks_total, activity[{time,agent,kind,tool,what}]`. `live.level`:
   `run|wait|quiet|stale|blocked|paused|done`; `wait` = waiting for an answer from the user.
 - `POST /telegram {chat_id, text}` → `{message}` (the command language above; only `allowed_chat_ids` when it is not empty)
+- `GET /projects` → `{"projects": [{"name"}], "restricted": bool}`: the folders a job may be started in (the allowlist
+  applied). The client prints it with `orkestra_client.py projects`.
+
+`orkestra_client.py` tries a connection again (after 0.3, 1 and 2 s) only when the request never reached the bridge
+(connection refused while it restarts, no free local port on a busy machine); a request that reached it is never sent
+twice. It ignores `HTTP(S)_PROXY` for the local bridge and always prints JSON, also for an answer that is not JSON.
+
+## Plain-language requests (the bundled plugin)
+
+Besides the commands, the plugin gives the OpenClaw agent two tools: `orkestra_run {project, request, engine?}` and
+`orkestra_status {}`. When the owner writes "fix the notification sound in namaz vakitleri" the agent starts the run
+with `orkestra_run`, which takes the same path as `/run`: the name is matched to a folder (a spelling that folds to
+exactly one folder is corrected, otherwise candidates are listed), a project with an open run is refused (fail closed),
+and the job's questions come back as notifications answered with Reply. The agent never answers a run's question.
+The tools are declared in `openclaw.plugin.json` (`contracts.tools`); a limited tool profile (for example `coding`)
+offers them to the model only when they are in `tools.alsoAllow`.
 
 ## Guarantees
 

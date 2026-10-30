@@ -129,3 +129,15 @@ test("parseSentMessageIds is shape-agnostic", () => {
   assert.deepEqual(parseSentMessageIds('{"deliveries":[{"message_id":5},{"message_id":6}]}'), ["5", "6"]);
   assert.deepEqual(parseSentMessageIds("not json"), []);
 });
+
+test("resolveProject: exact, folded, ambiguous and unknown names", async () => {
+  const { resolveProject, projectKey } = await import("./logic.js");
+  const list = [{ name: "namaz-vakitleri" }, { name: "pulse-race" }, { name: "pulse-arena" }, "docs"];
+  assert.deepEqual(resolveProject("pulse-race", list), { project: "pulse-race" });
+  assert.deepEqual(resolveProject("Namaz Vakitleri", list), { project: "namaz-vakitleri" });
+  assert.deepEqual(resolveProject("NAMAZ_VAKİTLERİ", list), { project: "namaz-vakitleri" });
+  assert.deepEqual(resolveProject("pulse", list), { suggestions: ["pulse-race", "pulse-arena"] });
+  assert.deepEqual(resolveProject("nothing-like-it", list), { suggestions: [] });
+  assert.deepEqual(resolveProject("  ", list), { suggestions: [] });
+  assert.equal(projectKey("Çalışma Alanı-2"), "calismaalani2");
+});

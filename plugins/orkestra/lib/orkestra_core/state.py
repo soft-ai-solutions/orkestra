@@ -550,6 +550,98 @@ def current_grant(session_id: str, prompt_id: Optional[str]) -> List[str]:
     return []
 
 
+# ---------------------------------------------------------------- stop requests (the dashboard's Pause / Abort)
+# A status change alone does not stop a chat that is in the middle of its turn, nor its background subagents. The
+# dashboard therefore leaves one note per session that worked on the run; the PreToolUse hook refuses that session's
+# next tool call with a stop message for as long as the run still has the status the note names. The note ends when
+# the run is resumed, when the person writes in that chat again, or after STOP_TTL.
+
+STOP_TTL = 3600.0
+STOP_STATUSES = ("paused", "aborted")
+
+
+def request_stop(project: Path, run_id: str, status: str, sessions: List[str], reason: str = "", by: str = "dashboard",
+                 now: Optional[float] = None) -> List[str]:
+    """Write a stop note for every session in `sessions` (session ids or their file-safe form). Returns the file-safe
+    ids written. `status` must be paused or aborted."""
+    if status not in STOP_STATUSES:
+        raise OrkestraError(f"a stop request needs status paused or aborted, not {status}")
+    stamp = time.time() if now is None else now
+    out: List[str] = []
+    for sid in dict.fromkeys(s for s in sessions if s):
+        key = _safe(sid)
+        write_json_atomic(paths.stops_dir() / f"{key}.json", {
+            "project": str(project), "run_id": run_id, "status": status, "reason": reason[:300], "by": by, "at": stamp})
+        out.append(key)
+    _prune(paths.stops_dir(), days=1)
+    return out
+
+
+def stop_for(session_id: str, now: Optional[float] = None) -> Optional[Dict[str, Any]]:
+    """The stop note that still applies to this session, or None. A note whose run was resumed (or that is older than
+    STOP_TTL) is removed on the way. Costs one failed stat when there is no note (every PreToolUse calls it)."""
+    if not session_id:
+        return None
+    path = paths.stops_dir() / f"{_safe(session_id)}.json"
+    if not path.exists():
+        return None
+    data = read_json(path)
+    stamp = time.time() if now is None else now
+    try:
+        age = stamp - float(data.get("at") or 0) if isinstance(data, dict) else -1.0
+    except (TypeError, ValueError):
+        age = -1.0                                  # a damaged note stops nobody
+    keep = isinstance(data, dict) and data.get("status") in STOP_STATUSES and _is_abs(data.get("project")) \
+        and bool(data.get("run_id")) and 0 <= age < STOP_TTL
+    if keep:
+        st = read_json(state_path(Path(str(data["project"])), str(data["run_id"])))
+        keep = isinstance(st, dict) and st.get("status") == data.get("status")
+    if keep:
+        # the chat has moved on to another run since: the stop was for the old one and must not halt the new work
+        cur = read_json(paths.sessions_dir() / f"{_safe(session_id)}.json")
+        if isinstance(cur, dict) and cur.get("run_id") and not (
+                cur.get("run_id") == data.get("run_id") and str(cur.get("project") or "") == str(data.get("project"))):
+            keep = False
+    if not keep:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        return None
+    return data
+
+
+def lift_stops(project: Path, run_id: str) -> int:
+    """Remove every stop note for this run (the person continues it from the dashboard). Returns how many."""
+    n = 0
+    try:
+        notes = list(paths.stops_dir().glob("*.json"))
+    except OSError:
+        return 0
+    for path in notes:
+        data = read_json(path)
+        if isinstance(data, dict) and data.get("run_id") == run_id and str(data.get("project") or "") == str(project):
+            try:
+                path.unlink()
+                n += 1
+            except OSError:
+                pass
+    return n
+
+
+def clear_stop(session_id: str) -> Optional[Dict[str, Any]]:
+    """Remove this session's stop note; returns what it said (None when there was none)."""
+    if not session_id:
+        return None
+    path = paths.stops_dir() / f"{_safe(session_id)}.json"
+    data = read_json(path)
+    try:
+        path.unlink()
+    except OSError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def _safe(s: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]", "_", s)[:120]
 

@@ -35,7 +35,7 @@ from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
 SUPPORTED: Tuple[str, ...] = ("en", "tr")
 DEFAULT = "en"
 AREAS: Tuple[str, ...] = ("common", "dispatch", "activity", "watchdog", "monitor", "tempo", "evidence", "runs", "cli",
-                          "help", "bridge", "protocol", "install")
+                          "help", "bridge", "protocol", "install", "risk")
 _LOCALE_VARS = ("LC_ALL", "LC_MESSAGES", "LANG", "LANGUAGE")
 _NAMES = {"en": "en", "english": "en", "ingilizce": "en", "tr": "tr", "turkish": "tr", "turkce": "tr", "türkçe": "tr"}
 

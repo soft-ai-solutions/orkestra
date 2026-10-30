@@ -54,6 +54,7 @@ function harness(script = {}, { config = {}, failRegister = [] } = {}) {
   const calls = [];
   const commands = {};
   const hooks = {};
+  const tools = {};
   const warnings = [];
   const runner = (argv) => {
     calls.push(argv);
@@ -79,9 +80,12 @@ function harness(script = {}, { config = {}, failRegister = [] } = {}) {
       hooks[name] = fn;
     },
     registerService: () => {},
+    registerTool: (def) => {
+      tools[def.name] = def;
+    },
   };
   plugin.register(api);
-  return { commands, hooks, calls, warnings };
+  return { commands, hooks, calls, warnings, tools };
 }
 
 const ok = (body) => Promise.resolve({ code: 0, stdout: JSON.stringify(body), stderr: "" });
@@ -291,4 +295,100 @@ test("a failed forward is reported in the reader's language; other messages stay
   assert.equal(await dispatch(hooks, "a", quoted, { senderId: "999" }), undefined);
   assert.equal(await dispatch(hooks, "a", quoted, { channel: "discord" }), undefined);
   assert.equal(await dispatch(hooks, "a", quoted, { isGroup: true }), undefined);
+});
+
+// ---------------------------------------------------------------- plain-language requests: the agent's tools
+
+const PROJECTS = { projects: [{ name: "namaz-vakitleri" }, { name: "pulse-race" }, { name: "pulse-arena" }, { name: "shop" }] };
+
+test("the agent gets orkestra_run and orkestra_status with a strict parameter schema", () => {
+  lang("en");
+  const { tools } = harness();
+  assert.deepEqual(Object.keys(tools).sort(), ["orkestra_run", "orkestra_status"]);
+  const run = tools.orkestra_run;
+  assert.deepEqual(run.parameters.required, ["project", "request"]);
+  assert.equal(run.parameters.additionalProperties, false);
+  assert.deepEqual(run.parameters.properties.engine.enum, ["claude", "cursor", "copilot", "pi"]);
+  assert.doesNotMatch(run.description, TURKISH_LETTERS);
+  const manifest = JSON.parse(fs.readFileSync(path.join(HERE, "openclaw.plugin.json"), "utf8"));
+  assert.deepEqual(manifest.contracts.tools.sort(), Object.keys(tools).sort());      // declared, as OpenClaw requires
+});
+
+test("orkestra_run resolves a spoken project name and starts it like /run", async () => {
+  lang("tr");
+  const { tools, calls } = harness({
+    projects: () => ok(PROJECTS),
+    start: (argv) => ok({ id: JOB, project: argv[3], engine: "claude" }),
+  });
+  const res = await tools.orkestra_run.execute("call-1", { project: "Namaz Vakitleri", request: "bildirim sesini düzelt" });
+  assert.equal(res.details.started, true);
+  assert.equal(res.details.jobId, JOB);
+  assert.equal(res.details.project, "namaz-vakitleri");
+  const start = calls.find((c) => c[2] === "start");
+  assert.deepEqual(start.slice(2), ["start", "namaz-vakitleri", "bildirim sesini düzelt", "--chat-id", CHAT, "--source", "openclaw"]);
+  assert.match(res.content[0].text, new RegExp(`\\[namaz-vakitleri\\] iş ${JOB}`));      // Reply routing can parse it
+});
+
+test("a name that cannot be a folder starts nothing; a refused folder name gets the candidates", async () => {
+  lang("en");
+  const { tools, calls } = harness({ projects: () => ok(PROJECTS), start: () => bad("project 'pulse' not found") });
+  const spaced = await tools.orkestra_run.execute("c", { project: "pulse game", request: "speed up the menu" });
+  assert.equal(spaced.details.started, false);
+  assert.match(spaced.content[0].text, /no project folder "pulse game"/);
+  assert.equal(calls.filter((c) => c[2] === "start").length, 0);
+  // a plausible folder name goes on as typed (the bridge decides, e.g. outside its allowlist), candidates ride along
+  const res = await tools.orkestra_run.execute("c", { project: "pulse", request: "speed up the menu" });
+  assert.equal(res.details.started, false);
+  assert.match(res.content[0].text, /Could not start: project 'pulse' not found\nDid you mean: pulse-race, pulse-arena\?/);
+  const none = await tools.orkestra_run.execute("c", { project: "zzz qq", request: "do it" });
+  assert.doesNotMatch(none.content[0].text, /Did you mean/);
+});
+
+test("orkestra_run keeps the /run guarantees: no takeover of an open run, fail closed", async () => {
+  lang("en");
+  const open = [{ project_name: "shop", status: "active", title: "Checkout", mode: "interactive", phase: "implement" }];
+  const busy = harness({ projects: () => ok(PROJECTS), watch: () => ok(open), start: () => ok({ id: JOB }) });
+  const res = await busy.tools.orkestra_run.execute("c", { project: "shop", request: "add CSV export" });
+  assert.equal(res.details.started, false);
+  assert.match(res.content[0].text, /already has an open Orkestra run/);
+  assert.equal(busy.calls.filter((c) => c[2] === "start").length, 0);
+  const blind = harness({ projects: () => ok(PROJECTS), watch: () => bad("watch failed"), start: () => ok({ id: JOB }) });
+  const res2 = await blind.tools.orkestra_run.execute("c", { project: "shop", request: "add CSV export" });
+  assert.match(res2.content[0].text, /could not check for open runs/);
+  assert.equal(blind.calls.filter((c) => c[2] === "start").length, 0);
+});
+
+test("without the project list (an older bridge) the name goes through as typed", async () => {
+  lang("en");
+  const { tools, calls } = harness({ projects: () => bad("not found"), start: (argv) => ok({ id: JOB, project: argv[3] }) });
+  const res = await tools.orkestra_run.execute("c", { project: "shop", request: "add CSV export", engine: "copilot" });
+  assert.equal(res.details.started, true);
+  assert.deepEqual(calls.find((c) => c[2] === "start").slice(-4), ["--chat-id", CHAT, "--source", "openclaw"]);
+  assert.ok(calls.find((c) => c[2] === "start").includes("copilot"));
+});
+
+test("orkestra_status is the same truthful view as /runs", async () => {
+  lang("en");
+  const h = harness({ watch: () => ok([]), status: () => ok({ jobs: [] }) });
+  const tool = await h.tools.orkestra_status.execute("c", {});
+  const cmd = await h.commands.runs.handler({});
+  assert.equal(tool.content[0].text, cmd.text);
+});
+
+test("/run also understands a project name with spaces or capitals", async () => {
+  lang("en");
+  const { commands, calls } = harness({ projects: () => ok(PROJECTS), start: (argv) => ok({ id: JOB, project: argv[3] }) });
+  await commands.run.handler({ args: "Shop add CSV export" });
+  assert.equal(calls.find((c) => c[2] === "start")[3], "shop");
+});
+
+test("a host without registerTool still gets every command", () => {
+  lang("en");
+  const api = {
+    pluginConfig: { chatId: CHAT, clientPath: CLIENT, orkestraCliPath: CLI, python: "py" },
+    logger: { warn() {}, info() {}, error() {}, debug() {} },
+    runtime: { system: { runCommandWithTimeout: () => ok({}) } },
+    registerCommand: () => {}, on: () => {}, registerService: () => {},
+  };
+  assert.doesNotThrow(() => plugin.register(api));
 });

@@ -54,7 +54,8 @@ def summarize(ev: Dict[str, Any], project: Path) -> str:
     tool = ev.get("tool_name") or ""
     ti = ev.get("tool_input") or {}
     if tool == "Bash":
-        return _mask(" ".join(str(ti.get("command") or "").split()))[:160]
+        # long enough that a risky tail (`… && git push --force`) is still on record for the dashboard's risk list
+        return _mask(" ".join(str(ti.get("command") or "").split()))[:480]
     if tool in ("Edit", "Write", "MultiEdit", "Read", "NotebookEdit"):
         return _rel(project, str(ti.get("file_path") or ti.get("notebook_path") or ""))
     if tool in ("Agent", "Task"):
@@ -90,6 +91,10 @@ def record(project: Path, run_id: str, ev: Dict[str, Any], kind: str, extra: str
         }
         if key:
             row["key"] = key[:16]                           # deny rows: short id of the refused call (loop post-mortems)
+        if kind == "deny" and extra:
+            attempt = summarize(ev, project)                # the refused call itself: the page names what was blocked
+            if attempt:
+                row["cmd"] = _mask(attempt)
         sid = str(ev.get("session_id") or "")
         if sid:
             row["sid"] = re.sub(r"[^A-Za-z0-9_.-]", "_", sid)[:120]
@@ -108,12 +113,20 @@ def record(project: Path, run_id: str, ev: Dict[str, Any], kind: str, extra: str
 
 
 def _rotate(path: Path) -> None:
-    """Keep the newest KEEP_LINES rows live; move the older rows to activity.1.jsonl instead of dropping them."""
+    """Keep the newest KEEP_LINES rows live, and no more than 3/4 of MAX_BYTES of them (long rows must not leave the file
+    above MAX_BYTES, which would rotate it again on every append); move the older rows to activity.1.jsonl instead of
+    dropping them."""
     with file_lock(path):
         all_lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
-        if len(all_lines) <= KEEP_LINES:
+        budget, kept, size = MAX_BYTES * 3 // 4, 0, 0
+        for line in reversed(all_lines):
+            n = len(line.encode("utf-8")) + 1
+            if kept >= KEEP_LINES or (kept and size + n > budget):
+                break
+            kept, size = kept + 1, size + n
+        if kept >= len(all_lines):
             return
-        old, keep = all_lines[:-KEEP_LINES], all_lines[-KEEP_LINES:]
+        old, keep = all_lines[:len(all_lines) - kept], all_lines[len(all_lines) - kept:]
         arch = path.with_name("activity.1.jsonl")
         try:
             if arch.exists() and arch.stat().st_size > ARCHIVE_MAX_BYTES:

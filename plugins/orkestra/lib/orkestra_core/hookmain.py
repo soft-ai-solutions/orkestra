@@ -192,7 +192,12 @@ def log(msg: str) -> None:
         pass
 
 
+_PENDING_CONTEXT = {"text": ""}        # a note that rides along with the next context_out of this hook (one answer only)
+
+
 def context_out(event_name: str, text: str) -> None:
+    pending, _PENDING_CONTEXT["text"] = _PENDING_CONTEXT["text"], ""
+    text = "\n".join(x for x in (pending, text) if x)
     if text:
         emit({"hookSpecificOutput": {"hookEventName": event_name, "additionalContext": text}})
 
@@ -358,6 +363,14 @@ def on_session_start(ev: dict) -> None:
 
 
 def on_user_prompt(ev: dict) -> None:
+    try:
+        _on_user_prompt(ev)
+    finally:
+        if _PENDING_CONTEXT["text"]:
+            context_out("UserPromptSubmit", "")
+
+
+def _on_user_prompt(ev: dict) -> None:
     sid = ev.get("session_id") or ""
     prompt = ev.get("prompt") or ""
     synthetic = activity.is_synthetic_prompt(prompt)
@@ -373,6 +386,15 @@ def on_user_prompt(ev: dict) -> None:
             ST.write_grant(sid, ev.get("prompt_id"), cats, prompt)
         else:
             ST.clear_grant(sid)
+        # the person writes in this chat again: a stop they gave from the dashboard has done its job
+        stop = ST.stop_for(sid)
+        ST.clear_stop(sid)
+        if stop:
+            verb = "aborted" if stop.get("status") == "aborted" else "paused"
+            _PENDING_CONTEXT["text"] = (
+                f"[orkestra] Run {stop.get('run_id')} was {verb} by the user from the Orkestra dashboard. Do not "
+                f"continue it unless this message asks for that"
+                + (" (then run `orkestra resume` first)." if verb == "paused" else "; it is closed."))
     b = binding_for(ev)
     if not b:
         return
@@ -643,7 +665,52 @@ def escalate_denial(ev: dict, b, d):
         return text, key
 
 
+# While the person's Pause / Abort from the dashboard stands, a stopped session may still look: these orkestra
+# subcommands only read (`orkestra status`, `watch --once`, ...). `resume` is not among them on purpose: the person
+# lifts the stop by writing in the chat (UserPromptSubmit clears it), never the model on its own.
+STOP_READ_COMMANDS = {"status", "watch", "next", "tempo", "agents", "doctor", "help", "version", "brief"}
+
+
+def stop_allows(ev: dict) -> bool:
+    """May a session that the person stopped from the dashboard still make this call? Only a shell line whose every
+    command is a read-only orkestra subcommand."""
+    if ev.get("tool_name") != "Bash":
+        return False
+    segs = sp.segments(str((ev.get("tool_input") or {}).get("command") or ""))
+    if not segs:
+        return False
+    for seg in segs:
+        argv = guards._orkestra_argv(seg)
+        words = [a for a in (argv or []) if not a.startswith("-")]
+        if argv is None or not words or words[0] not in STOP_READ_COMMANDS:
+            return False
+    return True
+
+
+def deny_stopped(ev: dict, stop: dict) -> None:
+    """Refuse the call of a session whose run the person paused or aborted from the dashboard. Not escalated: the
+    answer is the same every time and it must never turn into a `blocked` run."""
+    verb = "aborted" if stop.get("status") == "aborted" else "paused"
+    when = time.strftime("%H:%M", time.localtime(float(stop.get("at") or 0)))
+    why = str(stop.get("reason") or "").strip()
+    text = (f"[orkestra] STOP. The user {verb} run {stop.get('run_id')} from the Orkestra dashboard at {when}"
+            + (f" ({why})" if why else "") + ". Do not call any more tools for this work and do not retry this call. "
+            "End your turn now and tell the user in one sentence where the work stands. If you are a subagent, return "
+            "your report now. The run continues only when the user asks for it in this chat.")
+    emit({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                 "permissionDecisionReason": text}})
+    log(f"DENY [stopped] session={short_sid(ev.get('session_id', ''))} agent={ev.get('agent_type', '-')} "
+        f"tool={ev.get('tool_name')} run={stop.get('run_id')}")
+    project = Path(str(stop.get("project") or ""))
+    if project.is_dir():
+        activity.record(project, str(stop.get("run_id") or ""), ev, "deny", f"[stopped] {verb} from the dashboard")
+
+
 def on_pre_tool(ev: dict) -> None:
+    stop = ST.stop_for(ev.get("session_id") or "")
+    if stop and not stop_allows(ev):
+        deny_stopped(ev, stop)
+        return
     cfg = paths.global_config()
     b = binding_for(ev)
     grants = ST.current_grant(ev.get("session_id") or "", ev.get("prompt_id"))

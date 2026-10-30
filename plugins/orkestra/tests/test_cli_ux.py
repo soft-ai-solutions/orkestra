@@ -1029,7 +1029,12 @@ class TestDashboardReplaceFlag(helpers.Sandbox):
         self.assertFalse(CP.build_parser().parse_args(["dashboard"]).replace)
         with mock.patch("orkestra_core.monitor.dashboard", return_value=0) as dash:
             self.assertEqual(CLI.cmd_dashboard(ns), 0)
-        dash.assert_called_once_with(None, 4000, True, replace=True)
+        dash.assert_called_once_with(None, 4000, True, replace=True, read_only=False)
+        ro = CP.build_parser().parse_args(["dashboard", "--read-only"])
+        self.assertTrue(ro.read_only)
+        with mock.patch("orkestra_core.monitor.dashboard", return_value=0) as dash:
+            self.assertEqual(CLI.cmd_dashboard(ro), 0)
+        dash.assert_called_once_with(None, 47616, False, replace=False, read_only=True)
 
     def test_the_flag_is_documented_in_both_languages(self):
         for code in ("en", "tr"):

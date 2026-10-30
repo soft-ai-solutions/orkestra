@@ -550,8 +550,15 @@ class TestPageStyle(PageCase):
         self.assertNotRegex(page, r"""(?:src|href)\s*=\s*["']https?://""")
         self.assertNotRegex(script, r"""fetch\(\s*["']https?://""")
         self.assertNotRegex(self.css(), r"url\(|@import|@font-face")
-        self.assertEqual(script.count("fetch("), 1)                                   # one request, to the page's own origin
+        # two fetch calls, both to the page's own origin: the poll, and `req` that carries every click of the person
+        # (Pause / Abort and the console); `req` is only ever given a path of this server
+        self.assertEqual(script.count("fetch("), 2)
         self.assertIn('fetch(url(),{cache:"no-store"', script)
+        self.assertIn('const r=await fetch(path,{method:post?"POST":"GET"', script)
+        targets = re.findall(r"(?<!function )\breq\(([^,)]+)", script)
+        self.assertTrue(targets)
+        for target in targets:
+            self.assertRegex(target, r'^(?:"/api/(?:control|console/[a-z]+)"|cpath\("[a-z]+")', target)
         self.assertIn('"/api/runs?lang="', script)
         self.assertNotIn("innerHTML", SOURCE.split('PAGE = r"""')[1].split('"""')[0])
 

@@ -190,8 +190,29 @@ global.AbortController = class { constructor() { const l = []; this.signal = { a
   abort() { this.signal.aborted = true; this._l.forEach(f => f()); } };
 
 // ------------------------------------------------------------------ the fake server
-const sc = { views: [], fail: false, status: opt.status || 200, headers: {}, latency: 0, calls: [], inflight: 0, maxInflight: 0 };
+const sc = { views: [], fail: false, status: opt.status || 200, headers: {}, latency: 0, calls: [], inflight: 0, maxInflight: 0,
+             control: { ok: true, status: "paused", changed: true, stopped: 1 }, controlStatus: 200, controlFail: false, posts: [] };
 global.fetch = (url, init = {}) => new Promise((resolve, reject) => {
+  if (init.method === "POST") {      // the person's clicks: answered from sc.answers[path] (else sc.control), recorded in sc.posts
+    sc.posts.push({ url, at: clock.now, headers: init.headers || {}, body: init.body ? JSON.parse(init.body) : null });
+    const path = String(url).split("?")[0], answer = (sc.answers || {})[path];
+    setTimeout(() => {
+      if (sc.controlFail) return reject(new Error("down"));
+      const body = answer !== undefined ? answer : sc.control;
+      resolve({ ok: sc.controlStatus < 400, status: sc.controlStatus, headers: { get: () => null },
+                json: async () => JSON.parse(JSON.stringify(body)) });
+    }, sc.latency);
+    return;
+  }
+  if (String(url).indexOf("/api/console/") === 0) {      // console reads: sc.console[path], recorded in sc.gets (not a poll)
+    sc.gets = sc.gets || [];
+    sc.gets.push(url);
+    const path = String(url).split("?")[0], body = (sc.console || {})[path];
+    setTimeout(() => resolve({ ok: body !== undefined, status: body !== undefined ? 200 : 404, headers: { get: () => null },
+                               json: async () => JSON.parse(JSON.stringify(body !== undefined ? body : { ok: false, error: "not_found" })) }),
+               sc.latency);
+    return;
+  }
   sc.calls.push({ url, at: clock.now }); sc.inflight += 1; sc.maxInflight = Math.max(sc.maxInflight, sc.inflight);
   let done = false;
   const finish = fn => { if (done) return; done = true; sc.inflight -= 1; fn(); };

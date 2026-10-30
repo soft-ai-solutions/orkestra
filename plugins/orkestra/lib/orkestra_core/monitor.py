@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import hashlib
+import hmac
 import html
 import json
 import math
@@ -32,6 +33,8 @@ from . import paths
 from . import tempo as T
 from . import engines as EN
 from . import usage as U
+from . import risk as RK
+from . import console as CO
 from .state import OPEN_STATUSES, PHASES, active_runs
 from .util import read_json, read_text
 
@@ -78,9 +81,40 @@ def _project_dirs(workspace: Path) -> Iterable[Path]:
 UNREADABLE_MARK = "\u0000unreadable"          # private marker on the stand-in state of a run whose state.json cannot be parsed
 
 
+def _view_key(project: Path, run_id: str) -> str:
+    """The page's id of a run (`key` in a view): stable, and never a path the page could send back to act on."""
+    return hashlib.sha1((str(project) + "\0" + str(run_id)).encode("utf-8")).hexdigest()[:12]
+
+
+# A finished run does not change, but `--all` lists every one of them and each view reads its activity, gates and
+# usage again: 127 runs took ~0.45 s per poll (every 2 s). The server keeps a closed run's view while its files keep
+# their mtime, at most CLOSED_CACHE_SECONDS (the view's "ago" sentences move on), keyed per language.
+CLOSED_CACHE_SECONDS = 30.0
+CLOSED_CACHE_MAX = 2000
+_closed_cache: Dict[Tuple[str, str, str], Tuple[float, float, Dict[str, Any]]] = {}
+_closed_lock = threading.Lock()
+
+
+def _collect_cached(project: Path, st: Dict[str, Any], mtime: float) -> Dict[str, Any]:
+    if st.get("status") in OPEN_STATUSES or not mtime:
+        return _collect_safe(project, st, mtime)
+    key, now = (str(project), str(st.get("run_id")), i18n.lang()), time.time()
+    with _closed_lock:
+        hit = _closed_cache.get(key)
+    if hit and hit[0] == mtime and 0 <= now - hit[1] < CLOSED_CACHE_SECONDS:
+        return dict(hit[2], now=round(now, 3))
+    view = _collect_safe(project, st, mtime)
+    with _closed_lock:
+        if len(_closed_cache) >= CLOSED_CACHE_MAX:
+            _closed_cache.clear()
+        _closed_cache[key] = (mtime, now, view)
+    return view
+
+
 def discover(project: Optional[Path] = None, include_all: bool = False, recent_hours: float = 12.0,
-             workspace: Optional[Path] = None) -> List[Dict[str, Any]]:
-    """Open runs (+ runs finished in the last `recent_hours`, or every run with include_all)."""
+             workspace: Optional[Path] = None, cache: bool = False) -> List[Dict[str, Any]]:
+    """Open runs (+ runs finished in the last `recent_hours`, or every run with include_all). `cache`: reuse the views
+    of closed runs whose files did not change (the dashboard server; `watch` and one-off calls read fresh)."""
     projects = [project] if project else list(_project_dirs(workspace or paths.workspace_root()))
     now = time.time()
     found = []
@@ -111,8 +145,9 @@ def discover(project: Optional[Path] = None, include_all: bool = False, recent_h
     # stable order (open runs first, then project name): cards/blocks must not jump around as activity arrives
     found.sort(key=lambda x: (x[1].get("status") not in OPEN_STATUSES and UNREADABLE_MARK not in x[1],
                               x[0].name.lower(), str(x[1].get("run_id"))))
+    one = _collect_cached if cache else _collect_safe
     return [_unreadable_view(proj, st, mtime, ValueError("state.json is not valid JSON")) if UNREADABLE_MARK in st
-            else _collect_safe(proj, st, mtime) for proj, st, mtime in found]
+            else one(proj, st, mtime) for proj, st, mtime in found]
 
 
 def _collect_safe(project: Path, st: Dict[str, Any], mtime: float) -> Dict[str, Any]:
@@ -160,7 +195,8 @@ def _unreadable_view(project: Path, st: Dict[str, Any], mtime: float, exc: BaseE
                       "command": "", "where": "none", "activity_ts": None},
         "last_event_ts": None, "state_updated_ts": float(mtime) if mtime else None, "phase_history": [],
         "phases_skipped": [], "tasks_by_status": zero, "gates_struct": {"baseline": dict(none_gate), "verify": dict(none_gate)},
-        "notices": [], "activity_feed": [],
+        "notices": [], "activity_feed": [], "risks": [], "risk_counts": {"high": 0, "medium": 0, "blocked": 0},
+        "job": None, "docs": [],
     }
 
 
@@ -408,10 +444,71 @@ def _brief(kind: str, what: str, tool: str, cats: Dict[str, Dict[str, str]]) -> 
     return None
 
 
-def _activity_feed(rows: List[Dict[str, Any]], limit: int, compact: bool = True) -> List[Dict[str, Any]]:
+# ---- risky actions: what an agent ran (or tried, and a guard refused) that can delete data, publish, push or reach
+# secrets. risk.classify decides from the recorded text alone; a refused call counts when its own text is risky or when
+# the guard that refused it protects against damage (not a process rule such as the plan phase or a wait loop).
+DANGER_GUARDS = frozenset({"git", "secrets", "store", "deploy", "deps", "isolation", "home", "internals", "destructive",
+                           "rollback"})
+RISK_TOOLS = frozenset({"Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "Read"})
+RISK_KEEP = 40                       # newest risky actions per run in a view (the counts cover every row read)
+
+
+def _row_risk(row: Dict[str, Any], project: str = "", home: str = "") -> Optional[Dict[str, str]]:
+    """risk.classify of one activity row: a tool call's own text, or the refused call a deny row carries."""
+    kind, tool = row.get("kind"), str(row.get("tool") or "")
+    what = str(row.get("what") or "") if kind == "tool" else str(row.get("cmd") or "") if kind == "deny" else ""
+    if not what or not (tool in RISK_TOOLS or tool.startswith("mcp__")):
+        return None
+    return RK.classify(tool, what, project, home)
+
+
+def _risks(rows: List[Dict[str, Any]], project: str = "", home: str = "") -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
+    """(newest risky actions first, at most RISK_KEEP, identical consecutive ones folded with a count;
+    {"high", "medium", "blocked"} counts over all of them). Blocked ones never ran, whatever their level."""
+    events: List[Dict[str, Any]] = []
+    counts = {"high": 0, "medium": 0, "blocked": 0}
+    for row in rows:
+        kind = row.get("kind")
+        if kind not in ("tool", "deny"):
+            continue
+        hit = _row_risk(row, project, home)
+        guard = reason = ""
+        if kind == "deny":
+            guard, reason = _deny_parts(str(row.get("what") or ""))
+            if hit is None and guard not in DANGER_GUARDS:
+                continue
+            if hit is None:
+                hit = {"level": "medium", "code": "guard", "label": i18n.t("monitor.risk_guard", guard=guard)}
+        elif hit is None:
+            continue
+        ts, agent, tool = float(row.get("ts") or 0), str(row.get("agent") or "main"), str(row.get("tool") or "")
+        what = str(row.get("what") or "") if kind == "tool" else str(row.get("cmd") or "")
+        outcome = "blocked" if kind == "deny" else "ran"
+        counts["blocked" if outcome == "blocked" else hit["level"]] += 1
+        last = events[-1] if events else None
+        if last and (last["_agent"], last["tool"], last["what"], last["outcome"]) == (agent, tool, what, outcome):
+            last["count"] += 1
+            last["ts"] = ts
+            continue
+        ev = {"id": _row_id(ts, agent, tool, kind + "|" + what), "ts": ts, "level": hit["level"], "code": hit["code"],
+              "label": hit["label"], "tool": tool, "what": _cap(what, 600), "agent": A.short_agent(agent),
+              "main": agent == "main", "outcome": outcome, "count": 1, "_agent": agent}
+        if outcome == "blocked":
+            ev["guard"], ev["reason"] = guard, _cap(reason, 300)
+        events.append(ev)
+    events.sort(key=lambda e: -e["ts"])
+    out = events[:RISK_KEEP]
+    for ev in out:
+        ev.pop("_agent", None)
+    return out, counts
+
+
+def _activity_feed(rows: List[Dict[str, Any]], limit: int, compact: bool = True, project: str = "",
+                   home: str = "") -> List[Dict[str, Any]]:
     """The newest `limit` rows for a person. `compact=False` is the legacy list (what `watch` prints and the `activity`
     key always held): every row is kept, only repeated guard denials merge. `compact=True` (the `activity_feed` key the
-    page reads) also folds identical consecutive rows into one with a `count`."""
+    page reads) also folds identical consecutive rows into one with a `count`. A risky row carries `risk`
+    ({level, code, label}, see risk.py)."""
     if limit <= 0:
         return []
     entries: List[Dict[str, Any]] = []
@@ -432,9 +529,9 @@ def _activity_feed(rows: List[Dict[str, Any]], limit: int, compact: bool = True)
             # the hook records a refused call as ONE deny row (the command itself is not stored there), so the row
             # carries the category and the reason only: an earlier, allowed call must never be shown as "blocked"
             item["category"], item["reason"] = _deny_parts(item["what"])
-            item["attempt"] = ""
+            item["attempt"] = str(row.get("cmd") or "") if item["tool"] == "Bash" else ""   # the refused call, as the hook recorded it
             if item["tool"] == "Bash":
-                key = (agent, item["what"])
+                key = (agent, item["what"], item["attempt"])
                 previous = latest_denial.get(key)
                 if previous and 0 <= ts - previous["_last_ts"] <= 600:
                     previous["repeat_count"] += 1
@@ -462,6 +559,10 @@ def _activity_feed(rows: List[Dict[str, Any]], limit: int, compact: bool = True)
     for item in feed:
         for private in ("_last_ts", "_sort_ts", "_agent", "_ts"):
             item.pop(private, None)
+        hit = _row_risk({"kind": item["kind"], "tool": item["tool"],
+                         "what": item["what"], "cmd": item.get("attempt")}, project, home) if item["kind"] in ("tool", "deny") else None
+        if hit:
+            item["risk"] = hit
     return feed
 
 
@@ -997,8 +1098,10 @@ def collect(project: Path, st: Dict[str, Any], mtime: float = 0.0, n_activity: i
     phase_since = _parse_iso(hist[-1].get("at", "")) if hist else None
     ledger = [ln[2:] for ln in read_text(paths.feature_dir(project, rid) / "ledger.md").splitlines()
               if ln.startswith("- ")][-4:]
-    feed = _activity_feed(rows, n_activity, compact=False)
-    feed_page = _activity_feed(rows, n_activity)
+    home = _home()
+    feed = _activity_feed(rows, n_activity, compact=False, project=str(project), home=home)
+    feed_page = _activity_feed(rows, n_activity, project=str(project), home=home)
+    risks, risk_counts = _risks(rows, str(project), home)
     phase = st.get("phase", "intake")
     state_updated = _parse_iso(st.get("updated")) or mtime
     sessions = _sessions_for(project, rid)
@@ -1050,7 +1153,7 @@ def collect(project: Path, st: Dict[str, Any], mtime: float = 0.0, n_activity: i
         "updated": st.get("updated", ""),
         "artifacts": str(paths.feature_dir(project, rid)),
         # ---- additive (the dashboard page reads these; every key above is unchanged)
-        "key": hashlib.sha1((str(project) + "\0" + str(rid)).encode("utf-8")).hexdigest()[:12],
+        "key": _view_key(project, rid),
         "now": round(now, 3), "home": _home(),
         "attention": attention,
         "last_event_ts": activity_ts or None, "state_updated_ts": float(state_updated) if state_updated else None,
@@ -1059,6 +1162,9 @@ def collect(project: Path, st: Dict[str, Any], mtime: float = 0.0, n_activity: i
         "notices": _notices(st, rows, project, wd),
         # the page's feed: identical consecutive rows folded into one with a count (`activity` stays the plain list)
         "activity_feed": feed_page,
+        "risks": risks, "risk_counts": risk_counts,
+        # the run service's job that drives this run (headless), and the run documents a person can open
+        "job": CO.job_view(CO.job_for(project, rid)), "docs": CO.docs_of(project, rid),
     }
 
 
@@ -1333,6 +1439,115 @@ UI_KEYS = (
     "monitor.ui_fin_took", "monitor.ui_fin_ago", "monitor.ui_expand", "monitor.ui_fin_more",
     "common.ago", "tempo.dur_s", "tempo.dur_m", "tempo.dur_hm", "monitor.dur_h", "monitor.dur_d", "monitor.dur_dh",
     "monitor.ui_age_hung", "monitor.ui_announce_hung", "monitor.ui_record_changed", "monitor.ui_fin_aborted",
+    "monitor.ui_ctl_pause", "monitor.ui_ctl_abort", "monitor.ui_ctl_pause_aria", "monitor.ui_ctl_abort_aria",
+    "monitor.ui_ctl_pause_h", "monitor.ui_ctl_abort_h", "monitor.ui_ctl_pause_p", "monitor.ui_ctl_abort_p",
+    "monitor.ui_ctl_reason", "monitor.ui_ctl_reason_ph", "monitor.ui_ctl_cancel", "monitor.ui_ctl_ok_pause",
+    "monitor.ui_ctl_ok_abort", "monitor.ui_ctl_busy_pause", "monitor.ui_ctl_busy_abort", "monitor.ui_ctl_done_pause",
+    "monitor.ui_ctl_done_abort", "monitor.ui_ctl_err_token", "monitor.ui_ctl_err_closed", "monitor.ui_ctl_err_not_found",
+    "monitor.ui_ctl_err_reason_long", "monitor.ui_ctl_err_read_only", "monitor.ui_ctl_err_origin", "monitor.ui_ctl_err_net",
+    "monitor.ui_ctl_err_failed", "monitor.ui_ctl_foot",
+    "monitor.ui_risk_h", "monitor.ui_risk_sum", "monitor.ui_risk_p", "monitor.ui_risk_all", "monitor.ui_risk_less",
+    "monitor.ui_risk_go", "monitor.ui_risk_go_aria", "monitor.ui_risk_by", "monitor.ui_risk_guard", "monitor.ui_risk_n",
+    "risk.lvl_high", "risk.lvl_medium", "risk.lvl_blocked",
+    "monitor.ui_new",
+    "monitor.ui_tools",
+    "monitor.ui_nr_h",
+    "monitor.ui_nr_project",
+    "monitor.ui_nr_project_none",
+    "monitor.ui_nr_project_err",
+    "monitor.ui_nr_engine",
+    "monitor.ui_nr_engine_off",
+    "monitor.ui_nr_engine_default",
+    "monitor.ui_nr_engine_err",
+    "monitor.ui_nr_mode",
+    "monitor.ui_nr_mode_auto",
+    "monitor.ui_nr_mode_man",
+    "monitor.ui_nr_req",
+    "monitor.ui_nr_req_ph",
+    "monitor.ui_nr_req_n",
+    "monitor.ui_nr_req_short",
+    "monitor.ui_nr_req_long",
+    "monitor.ui_nr_ok",
+    "monitor.ui_nr_ok_err",
+    "monitor.ui_nr_go",
+    "monitor.ui_nr_busy",
+    "monitor.ui_nr_cancel",
+    "monitor.ui_nr_done",
+    "monitor.ui_nr_loading",
+    "monitor.ui_nr_noprojects",
+    "monitor.ui_svc_down",
+    "monitor.ui_svc_unset",
+    "monitor.ui_svc_missing",
+    "monitor.ui_svc_start",
+    "monitor.ui_svc_starting",
+    "monitor.ui_svc_up",
+    "monitor.ui_svc_failed",
+    "monitor.ui_cerr_down",
+    "monitor.ui_cerr_refused",
+    "monitor.ui_cerr_generic",
+    "monitor.ui_cerr_closed",
+    "monitor.ui_cerr_busy",
+    "monitor.ui_cerr_nojob",
+    "monitor.ui_job_h",
+    "monitor.ui_job_via",
+    "monitor.ui_job_status_queued",
+    "monitor.ui_job_status_running",
+    "monitor.ui_job_status_awaiting_user",
+    "monitor.ui_job_status_blocked",
+    "monitor.ui_job_status_paused",
+    "monitor.ui_job_status_stalled",
+    "monitor.ui_job_status_done",
+    "monitor.ui_job_status_error",
+    "monitor.ui_job_status_cancelled",
+    "monitor.ui_job_none",
+    "monitor.ui_job_turns",
+    "monitor.ui_job_reply",
+    "monitor.ui_job_reply_ph",
+    "monitor.ui_job_send",
+    "monitor.ui_job_sending",
+    "monitor.ui_job_sent",
+    "monitor.ui_job_reply_empty",
+    "monitor.ui_job_reply_long",
+    "monitor.ui_job_approve",
+    "monitor.ui_job_approve_word",
+    "monitor.ui_job_review",
+    "monitor.ui_job_continue",
+    "monitor.ui_job_continued",
+    "monitor.ui_job_working",
+    "monitor.ui_job_here",
+    "monitor.ui_docs",
+    "monitor.ui_doc_request",
+    "monitor.ui_doc_context",
+    "monitor.ui_doc_spec",
+    "monitor.ui_doc_plan",
+    "monitor.ui_doc_verification",
+    "monitor.ui_doc_report",
+    "monitor.ui_doc_loading",
+    "monitor.ui_doc_cut",
+    "monitor.ui_doc_close",
+    "monitor.ui_doc_open",
+    "monitor.ui_tl_svc_h",
+    "monitor.ui_tl_jobs_h",
+    "monitor.ui_tl_jobs_none",
+    "monitor.ui_tl_job_cancel",
+    "monitor.ui_tl_job_confirm",
+    "monitor.ui_tl_job_cancelled",
+    "monitor.ui_tl_clear_h",
+    "monitor.ui_tl_clear_p",
+    "monitor.ui_tl_hours",
+    "monitor.ui_tl_hours_err",
+    "monitor.ui_tl_preview",
+    "monitor.ui_tl_none",
+    "monitor.ui_tl_would",
+    "monitor.ui_tl_apply",
+    "monitor.ui_tl_applied",
+    "monitor.ui_tl_idle",
+    "monitor.ui_tl_doc_h",
+    "monitor.ui_tl_doc_p",
+    "monitor.ui_tl_doc_run",
+    "monitor.ui_tl_doc_busy",
+    "monitor.ui_tl_doc_ok",
+    "monitor.ui_tl_doc_bad",
 )
 
 # The page: one self-contained document (inline CSS and script, no external request: the CSP below forbids them). The
@@ -1344,19 +1559,22 @@ PAGE = r"""<!doctype html>
 <meta name="color-scheme" content="light dark">
 <title>__TITLE__</title>
 <style>
-:root{--bg:#f3f4f7;--surface:#ffffff;--ink:#151a24;--ink2:#4a5363;--line:#c9cfd9;--ctl:#7b8494;--focus:#0b57d0;
---you-fg:#7a3e00;--you-bg:#fff3dc;--you-edge:#b45f06;--stall-fg:#9b1c1c;--stall-bg:#fdeaea;--stall-edge:#c62828;
---run-fg:#0b6b36;--run-bg:#e6f5ec;--run-edge:#1a8a4a;--pause-fg:#533aa8;--pause-bg:#efebfc;--pause-edge:#6c4fd0;
---done-fg:#47505f;--done-bg:#eceff3;--done-edge:#7b8494;
+:root{--bg:#f3f5f9;--surface:#ffffff;--ink:#0f172a;--ink2:#3f4a5c;--line:#dfe4ec;--ctl:#6b7588;--focus:#2457d6;
+--you-fg:#8a4300;--you-bg:#fff4e0;--you-edge:#c26a06;--stall-fg:#a11a1a;--stall-bg:#fdecec;--stall-edge:#d32f2f;
+--run-fg:#0b6b3a;--run-bg:#e7f6ee;--run-edge:#1f9254;--pause-fg:#5136b0;--pause-bg:#f0ecfd;--pause-edge:#6d50d6;
+--done-fg:#465062;--done-bg:#edf0f4;--done-edge:#7c8597;--brand:#2457d6;--brand2:#7c4ddb;--on-brand:#ffffff;
+--shadow:0 1px 2px rgba(15,23,42,.05),0 2px 10px rgba(15,23,42,.06);--shadow-h:0 2px 4px rgba(15,23,42,.07),0 8px 24px rgba(15,23,42,.10);
 --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color-scheme:light dark}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0d1016;--surface:#151a23;--ink:#e9ecf2;--ink2:#a9b1bf;
---line:#323b49;--ctl:#8791a3;--focus:#8ab4ff;--you-fg:#ffc470;--you-bg:#2b2008;--you-edge:#e0902a;--stall-fg:#ff9b9b;
---stall-bg:#321416;--stall-edge:#ef5350;--run-fg:#6fe3a3;--run-bg:#0f291b;--run-edge:#34c46f;--pause-fg:#c7b8ff;
---pause-bg:#221b3d;--pause-edge:#8d73f0;--done-fg:#aab2c0;--done-bg:#1c222c;--done-edge:#7b8494}}
-:root[data-theme="dark"]{--bg:#0d1016;--surface:#151a23;--ink:#e9ecf2;--ink2:#a9b1bf;
---line:#323b49;--ctl:#8791a3;--focus:#8ab4ff;--you-fg:#ffc470;--you-bg:#2b2008;--you-edge:#e0902a;--stall-fg:#ff9b9b;
---stall-bg:#321416;--stall-edge:#ef5350;--run-fg:#6fe3a3;--run-bg:#0f291b;--run-edge:#34c46f;--pause-fg:#c7b8ff;
---pause-bg:#221b3d;--pause-edge:#8d73f0;--done-fg:#aab2c0;--done-bg:#1c222c;--done-edge:#7b8494}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0a0e17;--surface:#121826;--ink:#e8ecf4;--ink2:#b3bccb;
+--line:#283244;--ctl:#8a94a7;--focus:#8db4ff;--you-fg:#ffc670;--you-bg:#2a1f0a;--you-edge:#e39431;--stall-fg:#ffa3a3;
+--stall-bg:#331517;--stall-edge:#f05a57;--run-fg:#72e4a7;--run-bg:#0f2a1d;--run-edge:#38c675;--pause-fg:#cbbcff;
+--pause-bg:#231c40;--pause-edge:#9076f2;--done-fg:#aeb6c4;--done-bg:#1b2230;--done-edge:#7f889a;--brand:#8db4ff;--brand2:#b69cff;--on-brand:#0a0e17;
+--shadow:0 1px 2px rgba(0,0,0,.4),0 2px 12px rgba(0,0,0,.25);--shadow-h:0 2px 6px rgba(0,0,0,.45),0 10px 28px rgba(0,0,0,.35)}}
+:root[data-theme="dark"]{--bg:#0a0e17;--surface:#121826;--ink:#e8ecf4;--ink2:#b3bccb;
+--line:#283244;--ctl:#8a94a7;--focus:#8db4ff;--you-fg:#ffc670;--you-bg:#2a1f0a;--you-edge:#e39431;--stall-fg:#ffa3a3;
+--stall-bg:#331517;--stall-edge:#f05a57;--run-fg:#72e4a7;--run-bg:#0f2a1d;--run-edge:#38c675;--pause-fg:#cbbcff;
+--pause-bg:#231c40;--pause-edge:#9076f2;--done-fg:#aeb6c4;--done-bg:#1b2230;--done-edge:#7f889a;--brand:#8db4ff;--brand2:#b69cff;--on-brand:#0a0e17;
+--shadow:0 1px 2px rgba(0,0,0,.4),0 2px 12px rgba(0,0,0,.25);--shadow-h:0 2px 6px rgba(0,0,0,.45),0 10px 28px rgba(0,0,0,.35)}
 @media (prefers-contrast:more){:root{--line:var(--ctl)}}
 *{box-sizing:border-box}html{scroll-padding-top:calc(var(--bar-h,120px) + 8px);-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,
@@ -1510,9 +1728,128 @@ text-decoration:underline;padding:6px 0;min-height:32px}.more[hidden]{display:no
 .foot{max-width:1560px;margin:0 auto;padding:8px max(16px,env(safe-area-inset-left)) 32px;color:var(--ink2);font-size:12px;display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px}.foot .older{margin-left:0}
 .printline{display:none}
 .flash{outline:2px solid var(--focus);outline-offset:2px}
+/* ---- skin: calm surfaces, soft depth, one accent; every state keeps its own token pair (contrast-tested) */
+body{font-size:14px;letter-spacing:.005em}
+.bar{background:var(--bg);background:color-mix(in srgb,var(--bg) 86%,transparent);-webkit-backdrop-filter:saturate(1.5) blur(12px);backdrop-filter:saturate(1.5) blur(12px)}
+.mark{display:inline-block;width:24px;height:24px;border-radius:8px;flex:none;
+background:linear-gradient(135deg,var(--brand),var(--brand2));box-shadow:inset 0 0 0 1px rgba(255,255,255,.22),var(--shadow)}
+h1{font-size:19px;letter-spacing:-.01em}
+#q{border-radius:10px;border-color:var(--line);box-shadow:var(--shadow);min-height:36px}
+.fchip{box-shadow:var(--shadow);font-weight:500}
+.seg{border-color:var(--line);border-radius:10px;box-shadow:var(--shadow)}
+.sec{margin:18px 0}h2{font-size:15px;letter-spacing:-.005em}
+h2 small{display:inline-block;min-width:22px;text-align:center;background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:0 8px;font-size:12px}
+.card{border-radius:14px;border-color:var(--line);box-shadow:var(--shadow);padding:12px 16px 8px}
+.compact{border-radius:12px;box-shadow:var(--shadow)}
+.btn{border-radius:8px}
+.cmd{border-radius:10px}
+.gchip{border-radius:999px;padding:1px 10px}
+/* risk: one pill vocabulary everywhere (radar, card, feed row) */
+.rk{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;letter-spacing:.2px;border:1px solid;
+border-radius:999px;padding:0 8px;line-height:18px;white-space:nowrap;vertical-align:baseline}
+.rk-high{color:var(--stall-fg);background:var(--stall-bg);border-color:var(--stall-edge)}
+.rk-medium{color:var(--you-fg);background:var(--you-bg);border-color:var(--you-edge)}
+.rk-blocked{color:var(--pause-fg);background:var(--pause-bg);border-color:var(--pause-edge)}
+.wh .rk{margin-left:6px}
+.fr[data-risk="high"]{box-shadow:inset 3px 0 0 var(--stall-edge);padding-left:8px}
+.fr[data-risk="medium"]{box-shadow:inset 3px 0 0 var(--you-edge);padding-left:8px}
+.fr[data-risk="blocked"]{box-shadow:inset 3px 0 0 var(--pause-edge);padding-left:8px}
+.p-risk{margin:8px 0 4px;border:1px solid var(--line);border-left:4px solid var(--stall-edge);border-radius:10px;padding:8px 10px 4px}
+.p-risk[data-top="medium"]{border-left-color:var(--you-edge)}.p-risk[data-top="blocked"]{border-left-color:var(--pause-edge)}
+.p-risk[hidden]{display:none}
+.rh{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 10px;font-size:13px;font-weight:700}.rh .mut{font-weight:500;color:var(--ink2);font-size:12px}
+ul.rlist{list-style:none;margin:4px 0 0;padding:0}
+.ri{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:2px 10px;align-items:baseline;padding:6px 0;border-top:1px solid var(--line);font-size:12px}
+.ri:first-child{border-top:0}
+.rb{display:flex;flex-direction:column;gap:1px;min-width:0}
+.rl{font-weight:600;color:var(--ink)}
+.rb code{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:1px 6px;margin:2px 0}
+.rm{color:var(--ink2)}.rr{color:var(--ink2);font-style:italic;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.rf{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 12px}
+.ri time{color:var(--ink2);white-space:nowrap}
+.rf .go{min-height:0}
+.radar{max-width:1560px;margin:12px auto 0;padding:0 max(16px,env(safe-area-inset-right)) 0 max(16px,env(safe-area-inset-left))}
+.radar[hidden]{display:none}
+.radar-in{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--stall-edge);border-radius:14px;box-shadow:var(--shadow);padding:12px 16px 8px}
+.radar[data-top="medium"] .radar-in{border-left-color:var(--you-edge)}.radar[data-top="blocked"] .radar-in{border-left-color:var(--pause-edge)}
+.radar-head{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px}
+.radar-head h2{margin:0}.radar-sum{font-size:12px;color:var(--ink2);font-weight:600}
+.radar-head .tog{margin-left:auto}
+.radar-p{font-size:12px;color:var(--ink2);margin:2px 0 2px}
+@media(min-width:1100px){.radar ul.rlist{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:24px}
+.radar .ri:nth-child(2){border-top:0}}
+/* controls: the person's own two decisions about a run */
+.ctl{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 4px}.ctl[hidden]{display:none}
+.btn.cbtn{font-size:13px;font-weight:600;padding:4px 14px;min-height:32px}
+.btn.warn{color:var(--you-fg);border-color:var(--you-edge);background:var(--you-bg)}
+.btn.danger{color:var(--stall-fg);border-color:var(--stall-edge);background:var(--stall-bg)}
+.btn[disabled]{cursor:not-allowed;color:var(--ink2);background:var(--bg);border-color:var(--line)}
+.btn .ic{display:inline-block;margin-right:6px;font-weight:700}
+dialog.dlg{border:1px solid var(--line);border-radius:16px;padding:0;background:var(--surface);color:var(--ink);
+width:min(540px,calc(100vw - 32px));max-height:calc(100vh - 32px);box-shadow:0 24px 64px rgba(0,0,0,.35)}
+dialog.dlg::backdrop{background:rgba(10,14,23,.55)}
+.dlg-in{margin:0;padding:18px 20px 16px;display:flex;flex-direction:column;gap:8px}
+.dlg h2{font-size:18px;margin:0}
+.dlg-run{font-weight:600;margin:0}
+.dlg-p{color:var(--ink2);font-size:13px;margin:0}
+.dlg-lbl{font-size:12px;font-weight:600;color:var(--ink2);margin-top:6px}
+#ctl-reason{font:inherit;font-size:13px;border:1px solid var(--ctl);border-radius:10px;padding:8px 10px;background:var(--bg);color:var(--ink);resize:vertical;min-height:64px;width:100%}
+#ctl-reason::placeholder{color:var(--ink2);opacity:1}
+#ctl-reason[aria-invalid="true"]{border-color:var(--stall-edge);box-shadow:0 0 0 1px var(--stall-edge)}
+.dlg-err{color:var(--stall-fg);font-size:13px;font-weight:600;margin:0}.dlg-err[hidden]{display:none}
+.dlg-btns{display:flex;justify-content:flex-end;gap:8px;margin-top:8px;flex-wrap:wrap}
+.toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));transform:translateX(-50%);z-index:40;
+background:var(--ink);color:var(--bg);border-radius:12px;padding:10px 16px;font-weight:600;box-shadow:var(--shadow-h);max-width:calc(100vw - 32px)}
+.toast[hidden]{display:none}
+.compact .nm .rkn{margin-left:8px;font-size:11px;font-weight:700;color:var(--stall-fg);background:var(--stall-bg);border:1px solid var(--stall-edge);border-radius:999px;padding:0 7px}
+.compact .nm .rkn[hidden]{display:none}
+/* console: header actions, dialogs, conversation, documents, tools */
+.acts{display:inline-flex;gap:6px;flex:none;margin-left:auto}.acts[hidden]{display:none}.acts:not([hidden])+.seg{margin-left:0}
+.btn.primary{color:var(--on-brand);background:var(--brand);border-color:var(--brand)}
+.btn.primary[disabled]{color:var(--ink2);background:var(--bg);border-color:var(--line)}
+.acts .ic{font-weight:700}
+dialog.dlg.wide{width:min(760px,calc(100vw - 32px))}
+.dlg-top{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.dlg select,.dlg input[type="number"],.dlg textarea{font:inherit;font-size:13px;border:1px solid var(--ctl);border-radius:10px;padding:7px 10px;background:var(--bg);color:var(--ink);min-height:36px;width:100%}
+.dlg input[type="number"]{width:120px}.dlg textarea{resize:vertical;min-height:96px}
+.dlg textarea::placeholder{color:var(--ink2);opacity:1}
+.dlg [aria-invalid="true"]{border-color:var(--stall-edge);box-shadow:0 0 0 1px var(--stall-edge)}
+fieldset.modes{border:1px solid var(--line);border-radius:10px;padding:8px 12px;margin:6px 0 0;display:flex;flex-direction:column;gap:6px}
+fieldset.modes legend{font-size:12px;font-weight:600;color:var(--ink2);padding:0 4px}
+.modes label,.chk{display:flex;gap:8px;align-items:flex-start;font-size:13px;cursor:pointer}.chk{margin-top:6px}
+.modes input,.chk input{margin-top:3px;flex:none}
+.hint{font-size:12px;color:var(--ink2);margin:0}.hint:empty{display:none}
+.svc-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;background:var(--you-bg);color:var(--you-fg);border:1px solid var(--you-edge);border-radius:10px;padding:8px 10px;font-size:13px;font-weight:600}
+.svc-row[hidden]{display:none}.svc-row[data-ok="1"]{background:var(--run-bg);color:var(--run-fg);border-color:var(--run-edge)}
+.tl-sec{border-top:1px solid var(--line);padding-top:10px;margin-top:4px}.tl-sec h3{font-size:14px;margin:0 0 6px}
+.tl-row{display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px 12px}.tl-row .dlg-lbl{flex-basis:100%;margin:0}
+pre.doc{white-space:pre-wrap;overflow-wrap:anywhere;font-family:var(--mono);font-size:12px;line-height:1.55;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px 12px;max-height:min(60vh,560px);overflow:auto;margin:6px 0 0}
+pre.doc[hidden]{display:none}pre.doc .bad{color:var(--stall-fg);font-weight:700}pre.doc .good{color:var(--run-fg)}
+.tabs{display:flex;flex-wrap:wrap;gap:6px}.tab{font:inherit;font-size:12px;border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:999px;padding:3px 12px;min-height:30px;cursor:pointer}
+.tab[aria-pressed="true"]{box-shadow:inset 0 0 0 2px var(--ink)}
+.docs{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 10px;font-size:12px;margin:4px 0}.docs[hidden]{display:none}
+.docs>.mut{color:var(--ink2);font-weight:600}.dl{display:inline-flex;flex-wrap:wrap;gap:2px 12px}
+.p-job{margin:8px 0 4px;border:1px solid var(--line);border-left:4px solid var(--brand);border-radius:10px;padding:8px 10px}.p-job[hidden]{display:none}
+.jh{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;font-size:13px;font-weight:700}.jh .mut{font-weight:500;color:var(--ink2);font-size:12px}
+.jmsg{white-space:pre-wrap;font-size:13px;line-height:1.5;margin:6px 0 2px;max-height:9.5em;overflow:hidden}.jmsg.open{max-height:none}.jmsg.empty{color:var(--ink2)}
+.jform{display:flex;flex-direction:column;gap:6px;margin-top:6px}.jform[hidden]{display:none}
+.jform textarea{font:inherit;font-size:13px;border:1px solid var(--ctl);border-radius:10px;padding:7px 10px;background:var(--bg);color:var(--ink);resize:vertical;min-height:60px;width:100%}
+.jform textarea::placeholder{color:var(--ink2);opacity:1}.jform textarea[aria-invalid="true"]{border-color:var(--stall-edge)}
+.jform .btn{align-self:flex-end}
+ul.jt{list-style:none;margin:4px 0 0;padding:0;font-size:12px}ul.jt li{display:grid;grid-template-columns:auto minmax(0,1fr);gap:0 8px;padding:3px 0;border-top:1px solid var(--line)}
+ul.jt time{color:var(--ink2);white-space:nowrap}
+.rk.jst-awaiting_user,.rk.jst-blocked{color:var(--you-fg);background:var(--you-bg);border-color:var(--you-edge)}
+.rk.jst-running,.rk.jst-queued{color:var(--run-fg);background:var(--run-bg);border-color:var(--run-edge)}
+.rk.jst-paused{color:var(--pause-fg);background:var(--pause-bg);border-color:var(--pause-edge)}
+.rk.jst-stalled,.rk.jst-error{color:var(--stall-fg);background:var(--stall-bg);border-color:var(--stall-edge)}
+.rk.jst-done,.rk.jst-cancelled{color:var(--done-fg);background:var(--done-bg);border-color:var(--done-edge)}
+.rr2{color:var(--ink2);white-space:pre-wrap;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 @media (prefers-reduced-motion:no-preference){
 .dot{animation:pulse 2.4s ease-in-out infinite}@keyframes pulse{50%{opacity:.45}}
-.fr.new{animation:fade 1.2s ease-out}@keyframes fade{from{background:var(--you-bg)}to{background:transparent}}}
+.fr.new{animation:fade 1.2s ease-out}@keyframes fade{from{background:var(--you-bg)}to{background:transparent}}
+.card,.compact,.btn,.fchip{transition:box-shadow .15s ease,background-color .15s ease,border-color .15s ease}
+.card:hover,.compact:hover{box-shadow:var(--shadow-h)}
+.toast{animation:rise .2s ease-out}@keyframes rise{from{transform:translate(-50%,8px)}to{transform:translate(-50%,0)}}}
 @media (max-width:600px),(max-height:560px){
 .bar{display:contents}
 .r1{position:sticky;top:0;z-index:20;background:var(--bg);border-bottom:1px solid var(--line);
@@ -1530,10 +1867,19 @@ html{--bar-h:56px}}
 .compact{grid-template-columns:auto minmax(0,1fr)}.compact .badge{grid-row:1;grid-column:1}
 .compact .nm{grid-column:1/-1;grid-row:2}.compact .sub{grid-row:3}.compact .age{grid-row:4;grid-column:1/-1;text-align:left}
 .fr .wh{grid-column:1/-1}
-.sec .grid,.sec .list{grid-template-columns:minmax(0,1fr)}}
+.sec .grid,.sec .list{grid-template-columns:minmax(0,1fr)}
+.ctl .btn{flex:1 1 0;min-height:44px}
+dialog.dlg{width:100vw;max-width:100vw;margin:auto 0 0;border-radius:18px 18px 0 0}
+.dlg-btns .btn{flex:1 1 100%;min-height:44px}
+.radar{padding:0 max(12px,env(safe-area-inset-left))}.radar-in{padding:12px}
+.ri{grid-template-columns:auto minmax(0,1fr)}.ri time{grid-column:2;grid-row:1;text-align:right}
+.ri .rb{grid-column:1/-1}
+.acts .lbl{display:none}.acts .btn{min-height:44px;min-width:44px}.acts .ic{margin:0}
+.r1{flex-wrap:wrap;row-gap:0}.conn{order:5;flex:1 1 100%;padding-bottom:6px}
+.dlg-top .btn,.tl-row .btn,.tab{min-height:44px}.jform .btn{align-self:stretch;min-height:44px}}
 @media print{
 .bar{position:static}.r1,.r2{position:static}#sum,#q,.seg,.older,.conn,.skip,.banner,.btn,.tog,.more,
-.helpline,.foot label{display:none!important}.printline{display:block;margin:0 0 8px;font-size:12px}.card{break-inside:avoid}
+.helpline,.foot label,.ctl,.dlg,.toast,#radar-tog,.go,.mark,.acts,.jform,.docs{display:none!important}.printline{display:block;margin:0 0 8px;font-size:12px}.card{break-inside:avoid}
 body,:root{--bg:#fff;--surface:#fff;--ink:#000;--ink2:#222;--line:#999}
 .grid,.list{display:block}.grid>*,.list>*{margin-bottom:8px}.card{background:#fff!important}}
 @media (forced-colors:active){
@@ -1541,7 +1887,8 @@ body,:root{--bg:#fff;--surface:#fff;--ink:#000;--ink2:#222;--line:#999}
 .badge,.fchip,.k,.gchip,.cnt,.cat,.cmd{border:1px solid CanvasText}.card,.compact{border:1px solid CanvasText}
 ol.steps li{border-color:CanvasText;forced-color-adjust:none}ol.steps li.sd{background:CanvasText}
 ol.steps li.sc{background:Highlight;border-color:Highlight}ol.steps li.sk{border-style:dashed}
-.tbar{border-color:CanvasText}.tbar .d{background:CanvasText}.dot{background:Highlight}}
+.tbar{border-color:CanvasText}.tbar .d{background:CanvasText}.dot{background:Highlight}
+.rk,.rkn,.p-risk,.radar-in,dialog.dlg{border:1px solid CanvasText}.fr[data-risk]{box-shadow:none;border-left:3px solid CanvasText}}
 </style></head><body>
 <a class="skip" href="#main">__SKIP__</a>
 <div id="stale" class="banner warn" role="alert" hidden><span id="stale-msg"></span>
@@ -1550,15 +1897,55 @@ ol.steps li.sc{background:Highlight;border-color:Highlight}ol.steps li.sk{border
 <div id="rerr" class="banner bad" role="alert" hidden><span id="rerr-msg"></span><button type="button" class="btn" id="rerr-reload"></button></div>
 <p id="printline" class="printline"></p>
 <header class="bar" id="bar">
-<div class="r1" id="r1"><h1>Orkestra</h1><span id="conn" class="conn" data-state="live"><i class="dot" aria-hidden="true"></i><span id="conn-text">__LOADING__</span><button type="button" class="btn" id="conn-retry"></button></span>
+<div class="r1" id="r1"><span class="mark" aria-hidden="true"></span><h1>Orkestra</h1><span id="conn" class="conn" data-state="live"><i class="dot" aria-hidden="true"></i><span id="conn-text">__LOADING__</span><button type="button" class="btn" id="conn-retry"></button></span>
+<span id="acts" class="acts" hidden><button type="button" class="btn cbtn primary" id="new-btn"><span class="ic" aria-hidden="true">+</span><span class="lbl" id="new-lbl"></span></button><button type="button" class="btn cbtn" id="tools-btn"><span class="ic" aria-hidden="true">&#9776;</span><span class="lbl" id="tools-lbl"></span></button></span>
 <span class="seg" role="group" aria-label="__LANG_LABEL__"><a id="lang-en" href="?lang=en" hreflang="en" aria-label="__LANG_EN__"__CUR_EN__>EN</a><a id="lang-tr" href="?lang=tr" hreflang="tr" aria-label="__LANG_TR__"__CUR_TR__>TR</a></span></div>
 <div class="r2"><input id="q" type="search" dir="auto" placeholder="__SEARCH_PH__" aria-label="__SEARCH__" autocomplete="off" spellcheck="false">
 <div id="sum" role="group"></div><label class="older"><input type="checkbox" id="older"><span id="older-text">__OLDER__</span></label></div>
 <p id="calm" class="calm"></p>
 </header>
+<section id="radar" class="radar" aria-labelledby="radar-h" hidden><div class="radar-in">
+<div class="radar-head"><h2 id="radar-h"></h2><span id="radar-sum" class="radar-sum"></span><button type="button" class="tog" id="radar-tog" aria-expanded="false" aria-controls="radar-list" hidden></button></div>
+<p id="radar-p" class="radar-p"></p><ul id="radar-list" class="rlist"></ul></div></section>
 <main id="main" tabindex="-1"><div id="skel" aria-hidden="true"><div class="skel"><div class="card"></div><div class="card"></div><div class="card"></div></div></div></main>
 <footer class="foot"><span id="foot-build"></span><span id="foot-ro"></span><button type="button" class="tog" id="keys-btn" aria-controls="help" aria-expanded="false"></button><label class="older"><input type="checkbox" id="keys-on" checked><span id="keys-on-text"></span></label></footer>
 <p id="help" class="helpline" role="region" hidden></p>
+<dialog id="ctl" class="dlg" aria-labelledby="ctl-h" aria-describedby="ctl-p"><form id="ctl-form" class="dlg-in" method="dialog" novalidate>
+<h2 id="ctl-h"></h2><p id="ctl-run" class="dlg-run" dir="auto"></p><p id="ctl-p" class="dlg-p"></p>
+<label class="dlg-lbl" id="ctl-reason-l" for="ctl-reason"></label><textarea id="ctl-reason" rows="2" dir="auto" aria-describedby="ctl-err"></textarea>
+<p id="ctl-err" class="dlg-err" hidden></p>
+<div class="dlg-btns"><button type="button" class="btn cbtn" id="ctl-cancel"></button><button type="submit" class="btn cbtn" id="ctl-ok"></button></div>
+</form></dialog>
+<dialog id="nr" class="dlg wide" aria-labelledby="nr-h"><form id="nr-form" class="dlg-in" method="dialog" novalidate>
+<h2 id="nr-h"></h2>
+<div id="nr-svc" class="svc-row" hidden><span id="nr-svc-msg"></span><button type="button" class="btn cbtn" id="nr-svc-btn" hidden></button></div>
+<label class="dlg-lbl" id="nr-project-l" for="nr-project"></label><select id="nr-project" aria-describedby="nr-project-err"></select>
+<p id="nr-project-err" class="dlg-err" hidden></p>
+<label class="dlg-lbl" id="nr-engine-l" for="nr-engine"></label><select id="nr-engine" aria-describedby="nr-engine-hint"></select>
+<p id="nr-engine-hint" class="hint"></p>
+<fieldset class="modes"><legend id="nr-mode-l"></legend><label><input type="radio" name="nr-mode" id="nr-mode-auto" value="autopilot" checked><span id="nr-mode-auto-t"></span></label>
+<label><input type="radio" name="nr-mode" id="nr-mode-man" value="manual"><span id="nr-mode-man-t"></span></label></fieldset>
+<label class="dlg-lbl" id="nr-req-l" for="nr-req"></label><textarea id="nr-req" rows="5" dir="auto" aria-describedby="nr-req-err nr-req-n"></textarea>
+<p id="nr-req-n" class="hint"></p><p id="nr-req-err" class="dlg-err" hidden></p>
+<label class="chk"><input type="checkbox" id="nr-ok" aria-describedby="nr-ok-err"><span id="nr-ok-t"></span></label><p id="nr-ok-err" class="dlg-err" hidden></p>
+<p id="nr-err" class="dlg-err" hidden></p>
+<div class="dlg-btns"><button type="button" class="btn cbtn" id="nr-cancel"></button><button type="submit" class="btn cbtn primary" id="nr-go"></button></div>
+</form></dialog>
+<dialog id="tl" class="dlg wide" aria-labelledby="tl-h"><div class="dlg-in">
+<div class="dlg-top"><h2 id="tl-h"></h2><button type="button" class="btn cbtn" id="tl-close"></button></div>
+<section class="tl-sec" aria-labelledby="tl-svc-h"><h3 id="tl-svc-h"></h3><div id="tl-svc" class="svc-row"><span id="tl-svc-msg"></span><button type="button" class="btn cbtn" id="tl-svc-btn" hidden></button></div></section>
+<section class="tl-sec" aria-labelledby="tl-jobs-h"><h3 id="tl-jobs-h"></h3><ul id="tl-jobs" class="rlist"></ul></section>
+<section class="tl-sec" aria-labelledby="tl-clear-h"><h3 id="tl-clear-h"></h3><p id="tl-clear-p" class="dlg-p"></p>
+<div class="tl-row"><label class="dlg-lbl" id="tl-hours-l" for="tl-hours"></label><input id="tl-hours" type="number" min="1" max="8760" step="1" value="24" inputmode="numeric" aria-describedby="tl-hours-err"><button type="button" class="btn cbtn" id="tl-preview"></button></div>
+<p id="tl-hours-err" class="dlg-err" hidden></p><div id="tl-clear-out"></div></section>
+<section class="tl-sec" aria-labelledby="tl-doc-h"><h3 id="tl-doc-h"></h3><p id="tl-doc-p" class="dlg-p"></p><button type="button" class="btn cbtn" id="tl-doc-run"></button>
+<p id="tl-doc-sum" class="dlg-p" hidden></p><pre id="tl-doc-out" class="doc" hidden></pre></section>
+</div></dialog>
+<dialog id="rd" class="dlg wide" aria-labelledby="rd-h"><div class="dlg-in">
+<div class="dlg-top"><h2 id="rd-h" dir="auto"></h2><button type="button" class="btn cbtn" id="rd-close"></button></div>
+<div id="rd-tabs" class="tabs" role="group"></div><p id="rd-note" class="hint" hidden></p><pre id="rd-text" class="doc" tabindex="0" dir="auto"></pre>
+</div></dialog>
+<div id="toast" class="toast" hidden></div>
 <div id="live" class="vh" aria-live="polite"></div>
 <script type="application/json" id="labels">__LABELS__</script>
 <script>
@@ -1575,6 +1962,8 @@ const TG={passed:"\u2713",awaiting_green:"\u25d0",none:"\u25cb"};
 const TMAP={red_green:"passed",red:"awaiting_green",passed:"passed",awaiting_green:"awaiting_green",
  none:"none",na:"na",not_required:"na"};
 const MAX_ROWS=4,PHONE_ROWS=3,FULL_CAP=24,MANY=30,FIN_SHOW=5,CMD_RESTART="orkestra dashboard --open";
+const OPEN_ST=["active","awaiting_user","blocked","paused"],RISK_SHOW=3,RADAR_SHOW=6,RADAR_CAP=60,REASON_MAX=300;
+const REQ_MAX=8000,JMSG_LONG=420,ENGINE_NAMES={claude:"Claude Code",cursor:"Cursor",copilot:"GitHub Copilot",pi:"Pi"};
 const LANG=document.documentElement.lang||"en";
 const BASE_TITLE=document.title;
 const $=id=>document.getElementById(id);
@@ -1706,7 +2095,9 @@ function groupFeed(rows){
 const S={cards:new Map(),items:[],shown:[],filter:new Set(),q:"",older:false,many:false,lastGoodMs:0,fails:0,inflight:false,
  timer:0,nextAt:0,staleSrv:false,renderErr:false,started:false,open:{},finAll:false,sections:{},prev:new Map(),prevNeed:0,
  first:true,lastN:-2,pointer:0,deferred:0,force:false,ann:[],annAt:0,annFlip:false,reloading:false,printing:false,data:null,
- connPrev:"live",errKind:"net",errStatus:0,keysOn:true,help:false,barH:-1,rz:0,loadErr:null};
+ connPrev:"live",errKind:"net",errStatus:0,keysOn:true,help:false,barH:-1,rz:0,loadErr:null,
+ ctl:null,ctlBusy:{},ctlBad:false,radarAll:false,radar:{recs:[],sig:""},toastT:0,
+ nr:{busy:false,seq:0,engines:[],trigger:null},jbusy:{},rd:null,rdSeq:0,tlArm:{}};
 function openOf(key){return S.open[key]||(S.open[key]={});}
 function saveOpen(){const keys=Object.keys(S.open);if(keys.length>150)keys.slice(0,keys.length-150).forEach(k=>delete S.open[k]);
  lsSet("orkestra.dash.open",JSON.stringify(S.open));}
@@ -1717,7 +2108,8 @@ function paintTime(r){
  if(r.off||!r.fn)return;
  if(r.ts){setAttr(r.n,"datetime",new Date(r.ts*1000).toISOString());setAttr(r.n,"title",stamp(r.ts));}
  setText(r.n,r.fn(r.ts));}
-function tickTimes(){S.cards.forEach(st=>{st.recs=st.recs.filter(r=>!r.off);st.recs.forEach(paintTime);});}
+function tickTimes(){S.cards.forEach(st=>{st.recs=st.recs.filter(r=>!r.off);st.recs.forEach(paintTime);});
+ S.radar.recs=S.radar.recs.filter(r=>!r.off);S.radar.recs.forEach(paintTime);}
 
 // ---------------------------------------------------------------- selection / focus guards
 function selIn(node){
@@ -1768,7 +2160,8 @@ function newCard(key,inItem){
  art.setAttribute("aria-labelledby",r.h3.id+" "+r.rid.id+" "+r.title.id);        // two runs of one project differ in their name
  r.what=el("p","now");r.do=el("p","do");const cr=el("div","cmdrow");r.cmd=el("span","cmd");r.cmd.hidden=true;r.cmdCode=el("code");
  r.cmd.append(r.cmdCode);r.cmdBtn=null;cr.append(r.cmd);
- head.append(ch,r.h3,r.title,meta,r.what,r.do,cr);
+ r.ctl=el("div","ctl");r.ctl.hidden=true;r.ctlP=null;r.ctlA=null;
+ head.append(ch,r.h3,r.title,meta,r.what,r.do,cr,r.ctl);
  // phase stepper
  const steps=el("div","p-steps");r.ol=el("ol","steps");r.ol.setAttribute("aria-hidden","true");     // the line below says the same in words
  r.lis=PH.map(()=>el("li"));r.lis.forEach(li=>r.ol.append(li));
@@ -1782,13 +2175,28 @@ function newCard(key,inItem){
  tasks.append(r.tbar,r.tl,r.tlCur,r.tlTog,r.tlBox);
  // health
  const health=el("div","chips");
+ // risky actions of this run
+ const risk=el("div","p-risk");risk.hidden=true;r.rh=el("p","rh");r.rhS=el("span","mut");r.rh.append(el("span","",L.ui_risk_h),r.rhS);
+ r.rul=el("ul","rlist");r.rtog=el("button","tog");r.rtog.type="button";r.rtog.dataset.act="risks";r.rtog.hidden=true;
+ r.rtog.setAttribute("aria-expanded","false");risk.append(r.rh,r.rul,r.rtog);
+ // run documents and the conversation of a background run
+ const docs=el("div","docs");docs.hidden=true;r.docsBox=el("span","dl");docs.append(el("span","mut",L.ui_docs),r.docsBox);
+ const job=el("div","p-job");job.hidden=true;r.jh=el("p","jh");r.jhS=el("span","rk");r.jhV=el("span","mut");r.jh.append(el("span","",L.ui_job_h),r.jhS,r.jhV);
+ r.jmsg=el("div","jmsg");r.jmsg.dir="auto";r.jmore=el("button","tog");r.jmore.type="button";r.jmore.dataset.act="jmore";r.jmore.hidden=true;
+ r.jbtns=el("div","ctl");r.jbtns.hidden=true;r.jb={};
+ r.jform=el("div","jform");r.jform.hidden=true;r.jin=el("textarea");r.jin.id="ji-"+key;r.jin.dir="auto";r.jin.setAttribute("rows","2");
+ const jl=el("label","dlg-lbl",L.ui_job_reply);jl.setAttribute("for",r.jin.id);r.jerr=el("p","dlg-err");r.jerr.id="je-"+key;r.jerr.hidden=true;
+ r.jin.setAttribute("aria-describedby",r.jerr.id);r.jsend=el("button","btn cbtn primary",L.ui_job_send);r.jsend.type="button";r.jsend.dataset.act="jsend";
+ r.jform.append(jl,r.jin,r.jerr,r.jsend);r.jnote=el("p","hint");
+ r.jturns=el("details","jturns");r.jturnsS=el("summary");r.jturnsL=el("ul","jt");r.jturns.append(r.jturnsS,r.jturnsL);
+ job.append(r.jh,r.jmsg,r.jmore,r.jbtns,r.jform,r.jnote,r.jturns);
  // activity (a real <details>) and details
  const act=el("details","act"),sum=el("summary");r.actLbl=el("span");r.actLast=el("time","mut");sum.append(r.actLbl,r.actLast);
  r.ul=el("ul","feed");r.moreBtn=el("button","tog");r.moreBtn.type="button";r.moreBtn.dataset.act="feedmore";r.moreBtn.hidden=true;
  act.append(sum,r.ul,r.moreBtn);
  const det=el("details","dtl"),dsum=el("summary",""),dbox=el("div","dbox");dsum.textContent=L.ui_details;det.append(dsum,dbox);
- st.parts={head:head,steps:steps,tasks:tasks,health:health,act:act,det:det};st.dbox=dbox;st.act=act;st.det=det;r.health=health;
- art.append(head,steps,tasks,health,act,det);
+ st.parts={head:head,steps:steps,tasks:tasks,health:health,risk:risk,docs:docs,job:job,act:act,det:det};st.dbox=dbox;st.act=act;st.det=det;r.health=health;
+ art.append(head,steps,tasks,docs,health,risk,job,act,det);
  act._want=false;det._want=false;
  act.addEventListener("toggle",()=>{remember(key,"act",act);if(act.open&&st.v)patchFeed(st,st.v,st.a);});
  det.addEventListener("toggle",()=>{remember(key,"det",det);if(det.open&&st.v)patchDetails(st,st.v,st.a);});
@@ -1820,7 +2228,77 @@ function patchHead(st,v,a){
   show(r.cmd,true);setText(r.cmdCode,a.command);
   if(!r.cmdBtn){r.cmdBtn=copyBtn(a.command,r.cmdCode);r.cmd.append(r.cmdBtn);}
   setData(r.cmdBtn,"copy",a.command);setAttr(r.cmdBtn,"aria-label",L.ui_copy+": "+a.command);
- }else show(r.cmd,false);}
+ }else show(r.cmd,false);
+ if(v.job&&v.job.can_reply&&canAct()&&(a.group==="you"||a.group==="paused"||a.group==="stalled")){setText(r.do,L.ui_job_here);show(r.cmd,false);}
+ patchControls(st,v,a);}
+
+// ---------------------------------------------------------------- Pause / Abort (the server checks token, origin and the run again)
+function canControl(v,a){return !!META.controls&&!!META.token&&OPEN_ST.indexOf(v.status)>=0&&(a||{}).code!=="unreadable";}
+function ctlBtn(action){
+ const b=el("button","btn cbtn "+(action==="abort"?"danger":"warn")),ic=el("span","ic",action==="abort"?"\u2715":"\u2161");
+ ic.setAttribute("aria-hidden","true");b.append(ic,document.createTextNode(action==="abort"?L.ui_ctl_abort:L.ui_ctl_pause));
+ b.type="button";b.dataset.act="ctl";b.dataset.action=action;return b;}
+function patchControls(st,v,a){
+ const r=st.r,on=canControl(v,a);show(r.ctl,on);if(!on)return;
+ if(!r.ctlP){r.ctlP=ctlBtn("pause");r.ctlA=ctlBtn("abort");r.ctl.append(r.ctlP,r.ctlA);}
+ show(r.ctlP,v.status!=="paused");
+ const name=v.project_name+" "+v.run_id,busy=!!S.ctlBusy[st.key];
+ setAttr(r.ctlP,"aria-label",fmt(L.ui_ctl_pause_aria,{name:name}));setAttr(r.ctlA,"aria-label",fmt(L.ui_ctl_abort_aria,{name:name}));
+ [r.ctlP,r.ctlA].forEach(b=>{if(b.disabled!==busy)b.disabled=busy;});}
+function ctlErr(msg,field){
+ const e=$("ctl-err");setText(e,msg||"");show(e,!!msg);S.ctlBad=!!(msg&&field);
+ setAttr($("ctl-reason"),"aria-invalid",S.ctlBad?"true":null);if(msg)announce(msg);}
+function ctlLabels(c){const ok=$("ctl-ok"),ab=c.action==="abort";
+ setText(ok,S.ctlBusy[c.key]?(ab?L.ui_ctl_busy_abort:L.ui_ctl_busy_pause):(ab?L.ui_ctl_ok_abort:L.ui_ctl_ok_pause));
+ setCls(ok,"btn cbtn "+(ab?"danger":"warn"));ok.disabled=!!S.ctlBusy[c.key];}
+function openCtl(st,action,btn){
+ const v=st.v;if(!v||!canControl(v,st.a))return;
+ const c=S.ctl={key:st.key,action:action,btn:btn,name:v.project_name+" "+v.run_id,project:v.project_name},d=$("ctl");
+ setText($("ctl-h"),action==="abort"?L.ui_ctl_abort_h:L.ui_ctl_pause_h);
+ setText($("ctl-run"),[v.project_name,v.run_id,v.title].filter(Boolean).join(" \u00b7 "));
+ setText($("ctl-p"),action==="abort"?L.ui_ctl_abort_p:L.ui_ctl_pause_p);
+ setText($("ctl-reason-l"),L.ui_ctl_reason);setAttr($("ctl-reason"),"placeholder",L.ui_ctl_reason_ph);$("ctl-reason").value="";
+ setText($("ctl-cancel"),L.ui_ctl_cancel);ctlErr("");ctlLabels(c);setData(d,"action",action);
+ try{if(typeof d.showModal==="function"){if(!d.open)d.showModal();}else setAttr(d,"open","");}catch(e){setAttr(d,"open","");}
+ try{$("ctl-reason").focus();}catch(e){}}
+function closeCtl(){
+ const d=$("ctl"),c=S.ctl;S.ctl=null;
+ try{if(typeof d.close==="function"){if(d.open)d.close();}else setAttr(d,"open",null);}catch(e){setAttr(d,"open",null);}
+ try{if(c&&c.btn&&!c.btn.hidden&&!c.btn.disabled)c.btn.focus();}catch(e){}}
+function toast(msg){const t=$("toast");setText(t,msg);show(t,true);clearTimeout(S.toastT);S.toastT=setTimeout(()=>show(t,false),6000);}
+// every request the person's clicks send goes to this server (same origin): a POST carries the page's token
+async function req(path,opts){
+ opts=opts||{};const post=opts.body!==undefined;
+ const ctl=typeof AbortController==="function"?new AbortController():null,to=ctl?setTimeout(()=>ctl.abort(),opts.timeout||25000):0;
+ try{
+  const r=await fetch(path,{method:post?"POST":"GET",cache:"no-store",signal:ctl?ctl.signal:undefined,
+   headers:post?{"Content-Type":"application/json","X-Orkestra-Token":META.token||""}:{},
+   body:post?JSON.stringify(Object.assign({lang:LANG},opts.body)):undefined});
+  let data=null;try{data=await r.json();}catch(e){}
+  return data&&typeof data==="object"&&!Array.isArray(data)?data:{ok:false,error:"http",status:r.status};
+ }catch(e){return {ok:false,error:"net"};}finally{clearTimeout(to);}}
+function sendControl(key,action,reason){return req("/api/control",{body:{key:key,action:action,reason:reason},timeout:15000});}
+function ctlErrText(res,c,reason){
+ const e=(res&&res.error)||"net";
+ if(e==="token")return L.ui_ctl_err_token;if(e==="closed")return L.ui_ctl_err_closed;if(e==="not_found")return L.ui_ctl_err_not_found;
+ if(e==="read_only")return L.ui_ctl_err_read_only;if(e==="origin"||e==="host")return L.ui_ctl_err_origin;
+ if(e==="reason_long")return fmt(L.ui_ctl_err_reason_long,{n:reason.length});if(e==="net")return L.ui_ctl_err_net;
+ const cmd="orkestra "+c.action+(c.action==="abort"?' --reason "'+(reason||"dashboard").replace(/"/g,"'")+'"':"")+" -p "+c.project;
+ return fmt(L.ui_ctl_err_failed,{detail:(res&&(res.detail||res.error))||("HTTP "+((res&&res.status)||"?")),cmd:cmd});}
+async function submitCtl(ev){
+ if(ev&&ev.preventDefault)ev.preventDefault();
+ const c=S.ctl;if(!c||S.ctlBusy[c.key])return;
+ const reason=String($("ctl-reason").value||"").replace(/\s+/g," ").trim();
+ if(reason.length>REASON_MAX){ctlErr(fmt(L.ui_ctl_err_reason_long,{n:reason.length}),true);try{$("ctl-reason").focus();}catch(e){}return;}
+ S.ctlBusy[c.key]=true;ctlErr("");ctlLabels(c);refreshControls(c.key);
+ const res=await sendControl(c.key,c.action,reason);
+ S.ctlBusy[c.key]=false;refreshControls(c.key);
+ if(res&&res.ok){
+  const msg=fmt(c.action==="abort"?L.ui_ctl_done_abort:L.ui_ctl_done_pause,{name:c.name,n:res.stopped|0});
+  if(S.ctl===c)closeCtl();toast(msg);announce(msg);retryNow();return;}
+ if(S.ctl===c){ctlLabels(c);ctlErr(ctlErrText(res,c,reason),!!res&&res.error==="reason_long");}}
+function refreshControls(key){const st=S.cards.get(key)||S.cards.get(key+"#c");if(st&&st.kind==="card"&&st.v)patchControls(st,st.v,st.a);
+ const inner=S.cards.get(key+"#c");if(inner&&inner!==st&&inner.v)patchControls(inner,inner.v,inner.a);}
 
 function stepState(i,idx,v,skipped){
  if(v.status==="done")return "done";
@@ -1928,6 +2406,34 @@ function toggleNote(b){
  const p=b.previousSibling;if(!p)return;const open=p.className.indexOf("open")<0;
  setCls(p,open?"notice open":"notice");setText(b,open?L.ui_act_less:L.ui_show_more);setAttr(b,"aria-expanded",open?"true":"false");}
 
+// ---- risky actions
+function riskTop(c){return c&&c.high?"high":c&&c.medium?"medium":"blocked";}
+function riskSum(c){c=c||{};return fmt(L.ui_risk_sum,{high:c.high|0,medium:c.medium|0,blocked:c.blocked|0});}
+function riskLevel(e){return e.outcome==="blocked"?"blocked":(e.level==="high"?"high":"medium");}
+function riskRow(e,ctx,where){
+ const lvl=riskLevel(e),li=el("li","ri"),pill=el("span","rk rk-"+lvl,L["lvl_"+lvl]||lvl),body=el("div","rb"),tim=el("time");
+ body.append(el("span","rl",e.label||e.code||""));
+ if(e.what){const s=shortWhat(e.tool||"Bash",e.what,ctx),code=el("code","",s.text);code.dir="auto";setAttr(code,"title",e.what);body.append(code);}
+ if(e.outcome==="blocked"&&e.reason&&!where){const why=el("span","rr",e.reason);why.dir="auto";setAttr(why,"title",e.reason);body.append(why);}   // the radar stays brief: the card says why
+ const bits=[];if(where)bits.push(where);if(e.agent)bits.push(fmt(L.ui_risk_by,{agent:e.agent}));
+ if(e.outcome==="blocked"&&e.guard)bits.push(fmt(L.ui_risk_guard,{guard:e.guard}));
+ if((e.count|0)>1)bits.push(fmt(L.ui_act_times,{n:e.count}));
+ const foot=el("div","rf"),m=el("span","rm",bits.join(" \u00b7 "));m.dir="auto";foot.append(m);body.append(foot);
+ li.append(pill,body,tim);li.dataset.level=lvl;
+ return {li:li,body:body,foot:foot,tim:tim};}
+function patchRisk(st,v,a){
+ const r=st.r,list=v.risks||[],c=v.risk_counts||{},box=st.parts.risk;
+ show(box,list.length>0);
+ if(!list.length){(st.riskRecs||[]).forEach(x=>{x.off=true;});st.riskRecs=[];st.rsig="";return;}
+ setData(box,"top",riskTop(c));setText(r.rhS,riskSum(c));
+ const all=!!openOf(st.key).risk,shown=all?list:list.slice(0,RISK_SHOW);
+ show(r.rtog,list.length>RISK_SHOW);setText(r.rtog,all?L.ui_risk_less:fmt(L.ui_risk_all,{n:list.length}));setAttr(r.rtog,"aria-expanded",all?"true":"false");
+ const sig=JSON.stringify([shown.map(e=>[e.id,e.count,e.ts,e.label]),all]);if(st.rsig===sig)return;st.rsig=sig;
+ (st.riskRecs||[]).forEach(x=>{x.off=true;});st.riskRecs=[];
+ const ctx={project:v.project,home:v.home||META.home||""},kids=[];
+ shown.forEach(e=>{const x=riskRow(e,ctx,"");kids.push(x.li);st.riskRecs.push(bind(st,"risk",x.tim,e.ts,rowTime));});
+ r.rul.replaceChildren.apply(r.rul,kids);}
+
 // ---- feed
 function agentPrefix(r){return (r.kind==="tool"||r.kind==="deny")&&(r.main===false||(r.main===undefined&&r.agent&&r.agent!=="main"))?r.agent+" \u00b7 ":"";}
 // "Turn ended  turn ended": the badge already names the kind, so the text keeps only what it adds
@@ -1964,6 +2470,10 @@ function updateRow(st,rec,it,ctx){
  else if(rec.cnt){rec.cnt.remove();rec.cnt=null;}
  if(isDeny){if(!rec.cat){rec.cat=el("span","cat");rec.wh.append(rec.cat);}setText(rec.cat,catOf(it.row));}
  else if(rec.cat){rec.cat.remove();rec.cat=null;}
+ const rk=it.type==="row"?it.row.risk:null,rl=rk?(isDeny?"blocked":(rk.level==="high"?"high":"medium")):null;
+ setAttr(rec.li,"data-risk",rl);
+ if(rk){if(!rec.rk){rec.rk=el("span","rk");rec.wh.append(rec.rk);}setCls(rec.rk,"rk rk-"+rl);setText(rec.rk,rk.label||"");setAttr(rec.rk,"title",L["lvl_"+rl]||null);}
+ else if(rec.rk){rec.rk.remove();rec.rk=null;}
  rec.sm_=sm;
  const wantTog=sm.changed||!!rec.clip||rec.fullOpen;
  if(wantTog&&!rec.tog){rec.tog=el("button","tog");rec.tog.type="button";rec.tog.dataset.act="rowfull";rec.tog.setAttribute("aria-expanded","false");rec.wh.append(rec.tog);}
@@ -2069,7 +2579,8 @@ function guarded(st,part,fn){
 function patchCard(st,v,a){
  st.v=v;st.a=a;
  guarded(st,"head",()=>patchHead(st,v,a));guarded(st,"steps",()=>patchSteps(st,v,a));
- guarded(st,"tasks",()=>patchTasks(st,v,a));guarded(st,"health",()=>patchHealth(st,v,a));
+ guarded(st,"tasks",()=>patchTasks(st,v,a));guarded(st,"health",()=>patchHealth(st,v,a));guarded(st,"risk",()=>patchRisk(st,v,a));
+ guarded(st,"docs",()=>patchDocs(st,v));guarded(st,"job",()=>patchJob(st,v,a));
  guarded(st,"act",()=>patchFeed(st,v,a));guarded(st,"det",()=>patchDetails(st,v,a));
  if(st.group&&st.group!==a.group&&!S.first)flash(st.el);
  st.group=a.group;setCls(st.el,"card g-"+a.group+(st.el.className.indexOf("flash")>=0?" flash":""));
@@ -2090,12 +2601,15 @@ function newItem(key){
  const st={key:key,kind:"item",recs:[],card:null},box=el("div","item");box.dataset.key=key;st.el=box;
  const b=el("button","compact");b.type="button";b.dataset.act="expand";b.setAttribute("aria-expanded","false");
  const badge=el("span","badge"),gl=el("span","gl"),bw=el("span","bw"),nm=el("span","nm"),pn=el("b"),rid=el("span"),age=el("time"),sub=el("span","sub");
- gl.setAttribute("aria-hidden","true");badge.append(gl,bw);nm.append(pn,rid);b.append(badge,nm,age,sub);box.append(b);
- st.c={btn:b,gl:gl,bw:bw,pn:pn,rid:rid,age:age,sub:sub};return st;}
+ const rkn=el("span","rkn");rkn.hidden=true;
+ gl.setAttribute("aria-hidden","true");badge.append(gl,bw);nm.append(pn,rid,rkn);b.append(badge,nm,age,sub);box.append(b);
+ st.c={btn:b,gl:gl,bw:bw,pn:pn,rid:rid,age:age,sub:sub,rkn:rkn};return st;}
 function patchItem(st,v,a){
  st.v=v;st.a=a;const c=st.c,b=badgeParts(a);
  setCls(st.el,"item g-"+a.group);setText(c.gl,b.gl);setText(c.bw,b.bw);setText(c.pn,v.project_name);setText(c.rid," "+v.run_id);
  setText(c.sub,v.title);setAttr(c.btn,"title",fmt(L.ui_expand,{name:v.project_name+" "+v.run_id}));
+ const rc=v.risk_counts||{},rn=(rc.high|0)+(rc.medium|0)+(rc.blocked|0);
+ show(c.rkn,rn>0);setText(c.rkn,rn>0?fmt(L.ui_risk_n,{n:rn}):"");setAttr(c.rkn,"title",rn>0?riskSum(rc):null);
  const ts=a.group==="done"?(v.state_updated_ts||v.last_event_ts||0):(v.last_event_ts||v.state_updated_ts||0);
  if(!st.ageRec)st.ageRec=bind(st,"item",c.age,ts,null);
  st.ageRec.ts=ts;
@@ -2178,6 +2692,237 @@ function noMatchEl(){
  const d=el("div","empty"),b=el("button","btn",L.ui_clear);b.type="button";b.dataset.act="clear";
  d.append(el("p","",L.ui_no_match),b);S.noMatch=d;return d;}
 
+// ---------------------------------------------------------------- console: the terminal's run capabilities on the page
+function cpath(p,q){return "/api/console/"+p+"?lang="+encodeURIComponent(LANG)+(q?"&"+q:"");}
+function canAct(){return !!(META.controls&&META.token);}
+function engineName(id){return ENGINE_NAMES[id]||String(id||"");}
+function cerr(res){
+ const e=(res&&res.error)||"net",d=(res&&res.detail)||"";
+ if(e==="service_down"||e==="net")return L.ui_cerr_down;if(e==="service_refused")return fmt(L.ui_cerr_refused,{detail:d||"?"});
+ if(e==="service_not_configured")return L.ui_svc_unset;if(e==="service_not_installed")return fmt(L.ui_svc_missing,{cmd:'orkestra run "..."'});
+ if(e==="service_start_failed"||e==="service_setup_failed")return L.ui_svc_failed;
+ if(e==="token")return L.ui_ctl_err_token;if(e==="read_only")return L.ui_ctl_err_read_only;if(e==="origin"||e==="host")return L.ui_ctl_err_origin;
+ if(e==="job_closed")return L.ui_cerr_closed;if(e==="job_busy")return L.ui_cerr_busy;if(e==="no_job")return L.ui_cerr_nojob;
+ if(e==="not_found")return L.ui_ctl_err_not_found;return fmt(L.ui_cerr_generic,{detail:d||e});}
+function fieldErr(id,msg,input){const e=$(id);setText(e,msg||"");show(e,!!msg);if(input)setAttr(input,"aria-invalid",msg?"true":null);}
+function dlgOpen(d,focus){try{if(typeof d.showModal==="function"){if(!d.open)d.showModal();}else setAttr(d,"open","");}catch(e){setAttr(d,"open","");}
+ if(focus){try{focus.focus();}catch(e){}}}
+function dlgShut(d){try{if(typeof d.close==="function"){if(d.open)d.close();}else setAttr(d,"open",null);}catch(e){setAttr(d,"open",null);}}
+function dlgUp(d){return d.open===true||d.getAttribute("open")!==null;}
+function refocus(n){try{if(n&&n.focus&&!n.hidden)n.focus();}catch(e){}}
+// ---- the run service (the page asks this server; it talks to the service with a token the browser never sees)
+function svcText(s){s=s||{};return !s.installed?fmt(L.ui_svc_missing,{cmd:'orkestra run "..."'}):!s.configured?L.ui_svc_unset:
+ s.running?fmt(L.ui_svc_up,{port:s.port}):L.ui_svc_down;}
+function svcRow(prefix,s){
+ const row=$(prefix+"-svc"),btn=$(prefix+"-svc-btn");show(row,true);
+ const known=!!(s&&("installed" in s));setText($(prefix+"-svc-msg"),known?svcText(s):cerr(s));
+ setData(row,"ok",known&&s.running?"1":"0");show(btn,!!(known&&s.installed&&!s.running));setText(btn,L.ui_svc_start);btn.disabled=false;}
+async function startService(prefix){
+ const btn=$(prefix+"-svc-btn");btn.disabled=true;setText(btn,L.ui_svc_starting);
+ const r=await req("/api/console/service",{body:{},timeout:40000});
+ if(r.ok){announce(fmt(L.ui_svc_up,{port:r.port}));svcRow(prefix,r);if(prefix==="nr"){show($("nr-svc"),false);await nrProjects();}return;}
+ btn.disabled=false;setText(btn,L.ui_svc_start);setText($(prefix+"-svc-msg"),cerr(r));announce(cerr(r));}
+// ---- new run
+function nrLabels(){
+ setText($("nr-h"),L.ui_nr_h);setText($("nr-project-l"),L.ui_nr_project);setText($("nr-engine-l"),L.ui_nr_engine);
+ setText($("nr-mode-l"),L.ui_nr_mode);setText($("nr-mode-auto-t"),L.ui_nr_mode_auto);setText($("nr-mode-man-t"),L.ui_nr_mode_man);
+ setText($("nr-req-l"),L.ui_nr_req);setAttr($("nr-req"),"placeholder",L.ui_nr_req_ph);setText($("nr-ok-t"),L.ui_nr_ok);
+ setText($("nr-cancel"),L.ui_nr_cancel);setText($("nr-go"),S.nr.busy?L.ui_nr_busy:L.ui_nr_go);nrCount();}
+function nrCount(){const n=String($("nr-req").value||"").trim().length;setText($("nr-req-n"),fmt(L.ui_nr_req_n,{n:n,max:REQ_MAX}));
+ if(n>REQ_MAX)fieldErr("nr-req-err",fmt(L.ui_nr_req_long,{max:REQ_MAX,n:n}),$("nr-req"));else if($("nr-req").getAttribute("aria-invalid")&&n>=3)fieldErr("nr-req-err","",$("nr-req"));}
+async function openNew(){
+ if(!canAct())return;S.nr.trigger=document.activeElement;
+ ["nr-err","nr-project-err","nr-ok-err"].forEach(id=>fieldErr(id,""));fieldErr("nr-req-err","",$("nr-req"));nrLabels();
+ const m=lsGet("orkestra.dash.nr.mode");$("nr-mode-man").checked=m==="manual";$("nr-mode-auto").checked=m!=="manual";
+ dlgOpen($("nr"),$("nr-req"));
+ show($("nr-svc"),true);setData($("nr-svc"),"ok","0");setText($("nr-svc-msg"),L.ui_nr_loading);show($("nr-svc-btn"),false);
+ const s=await req(cpath("service"));
+ if(s.ok&&s.running){show($("nr-svc"),false);await nrProjects();}else svcRow("nr",s);}
+function closeNew(){if(S.nr.busy)return;dlgShut($("nr"));refocus(S.nr.trigger);S.nr.trigger=null;}
+async function nrProjects(){
+ const sel=$("nr-project"),r=await req(cpath("projects"));
+ if(!r.ok){svcRow("nr",r);return;}
+ const list=(r.projects||[]).map(p=>String(p&&p.name||"")).filter(Boolean),keep=sel.value||lsGet("orkestra.dash.nr.project")||"";
+ const first=el("option","",L.ui_nr_project_none);first.value="";const opts=[first];
+ list.forEach(n=>{const o=el("option","",n);o.value=n;opts.push(o);});sel.replaceChildren.apply(sel,opts);
+ sel.value=list.indexOf(keep)>=0?keep:"";
+ fieldErr("nr-project-err",list.length?"":fmt(L.ui_nr_noprojects,{workspace:META.workspace||""}));
+ await nrEngines();}
+async function nrEngines(){
+ const sel=$("nr-engine"),p=$("nr-project").value,seq=++S.nr.seq;
+ const r=await req(cpath("engines",p?"project="+encodeURIComponent(p):""));
+ if(seq!==S.nr.seq)return;                                  // a newer project choice already asked
+ if(!r.ok){setText($("nr-engine-hint"),cerr(r));return;}
+ const list=S.nr.engines=Array.isArray(r.engines)?r.engines:[],keep=sel.value||lsGet("orkestra.dash.nr.engine")||r.default||"claude";
+ sel.replaceChildren.apply(sel,list.map(e=>{const o=el("option","",e.available?(e.id===r.default?fmt(L.ui_nr_engine_default,{name:e.label}):e.label)
+  :fmt(L.ui_nr_engine_off,{name:e.label}));o.value=e.id;o.disabled=!e.available;return o;}));
+ const pick=list.find(e=>e.id===keep&&e.available)||list.find(e=>e.id===r.default&&e.available)||list.find(e=>e.available);
+ if(pick)sel.value=pick.id;
+ setText($("nr-engine-hint"),list.filter(e=>!e.available&&e.reason).map(e=>e.label+": "+e.reason).join(" \u00b7 "));}
+async function submitNew(ev){
+ if(ev&&ev.preventDefault)ev.preventDefault();if(S.nr.busy)return;
+ const proj=$("nr-project").value,eng=$("nr-engine").value,text=String($("nr-req").value||"").trim(),manual=!!$("nr-mode-man").checked;
+ const errs=[];
+ fieldErr("nr-project-err",proj?"":L.ui_nr_project_err,$("nr-project"));if(!proj)errs.push([$("nr-project"),L.ui_nr_project_err]);
+ const off=(S.nr.engines||[]).find(e=>e.id===eng&&!e.available);if(off)errs.push([$("nr-engine"),fmt(L.ui_nr_engine_err,{why:off.reason||""})]);
+ const rm=text.length<3?L.ui_nr_req_short:text.length>REQ_MAX?fmt(L.ui_nr_req_long,{max:REQ_MAX,n:text.length}):"";
+ fieldErr("nr-req-err",rm,$("nr-req"));if(rm)errs.push([$("nr-req"),rm]);
+ const ok=!!$("nr-ok").checked;fieldErr("nr-ok-err",ok?"":L.ui_nr_ok_err,$("nr-ok"));if(!ok)errs.push([$("nr-ok"),L.ui_nr_ok_err]);
+ if(off)fieldErr("nr-err",errs.find(x=>x[0]===$("nr-engine"))[1]);else fieldErr("nr-err","");
+ if(errs.length){refocus(errs[0][0]);announce(errs[0][1]);return;}
+ S.nr.busy=true;const go=$("nr-go");go.disabled=true;setText(go,L.ui_nr_busy);
+ const r=await req("/api/console/start",{body:{project:proj,request:text,engine:eng,mode:manual?"manual":"autopilot"},timeout:45000});
+ S.nr.busy=false;go.disabled=false;setText(go,L.ui_nr_go);
+ if(r.ok){
+  lsSet("orkestra.dash.nr.project",proj);lsSet("orkestra.dash.nr.engine",eng);lsSet("orkestra.dash.nr.mode",manual?"manual":"autopilot");
+  $("nr-req").value="";$("nr-ok").checked=false;nrCount();closeNew();
+  const msg=fmt(L.ui_nr_done,{project:proj,engine:engineName((r.job&&r.job.engine)||eng)});toast(msg);announce(msg);retryNow();return;}
+ if(r.error==="service_down"||r.error==="service_not_configured")svcRow("nr",r);
+ fieldErr("nr-err",cerr(r));announce(cerr(r));}
+// ---- run documents
+function patchDocs(st,v){
+ const list=v.docs||[];show(st.parts.docs,list.length>0);if(!list.length){st.dsig="";return;}
+ const sig=list.join(",")+"|"+v.project_name+v.run_id;if(st.dsig===sig)return;st.dsig=sig;
+ st.r.docsBox.replaceChildren.apply(st.r.docsBox,list.map(n=>{const b=el("button","tog",L["ui_doc_"+n]||n);b.type="button";b.dataset.act="doc";
+  b.dataset.doc=n;setAttr(b,"aria-label",fmt(L.ui_doc_open,{doc:L["ui_doc_"+n]||n,name:v.project_name+" "+v.run_id}));return b;}));}
+async function openDoc(st,name){
+ const v=st.v;if(!v)return;S.rd={key:st.key,v:v,trigger:document.activeElement};setText($("rd-close"),L.ui_doc_close);
+ dlgOpen($("rd"),$("rd-close"));await showDoc(name);}
+async function showDoc(name){
+ const c=S.rd;if(!c)return;const label=L["ui_doc_"+name]||name;
+ setText($("rd-h"),label+" \u00b7 "+c.v.project_name+" "+c.v.run_id);
+ const tabs=$("rd-tabs");tabs.replaceChildren.apply(tabs,(c.v.docs||[]).map(n=>{const b=el("button","tab",L["ui_doc_"+n]||n);b.type="button";b.dataset.doc=n;
+  setAttr(b,"aria-pressed",n===name?"true":"false");return b;}));
+ setText($("rd-text"),L.ui_doc_loading);show($("rd-note"),false);
+ const seq=++S.rdSeq,r=await req(cpath("doc","key="+encodeURIComponent(c.key)+"&name="+encodeURIComponent(name)));
+ if(seq!==S.rdSeq||S.rd!==c)return;
+ if(!r.ok){setText($("rd-text"),cerr(r));return;}
+ setText($("rd-text"),r.text||"");if(r.truncated){setText($("rd-note"),fmt(L.ui_doc_cut,{path:r.path||""}));show($("rd-note"),true);}}
+function closeDoc(){const c=S.rd;S.rd=null;dlgShut($("rd"));if(c)refocus(c.trigger);}
+// ---- the conversation of a background run: what the agent said last, and the person's answer
+function jbtn(st,act,label,kind){let b=st.r.jb[act];if(!b){b=el("button","btn cbtn"+(kind?" "+kind:""));b.type="button";b.dataset.act=act;st.r.jb[act]=b;}
+ setText(b,label);return b;}
+// the run service writes 2026-10-30T13:01:02+0300: Safari parses ISO offsets only with a colon (+03:00)
+function shortStamp(s){const t=Date.parse(String(s||"").replace(" ","T").replace(/([+-]\d\d)(\d\d)$/,"$1:$2"));return isNaN(t)?String(s||""):clock(t/1000);}
+function patchJob(st,v,a){
+ const r=st.r,j=v.job,box=st.parts.job;show(box,!!j);if(!j)return;
+ const busy=!!S.jbusy[st.key],act=canAct(),reply=act&&!!j.can_reply;
+ setCls(r.jhS,"rk jst-"+j.status);setText(r.jhS,L["ui_job_status_"+j.status]||j.status);setText(r.jhV,fmt(L.ui_job_via,{engine:engineName(j.engine)}));
+ const msg=String(j.message||""),open=!!openOf(st.key).jmsg;
+ setText(r.jmsg,msg||L.ui_job_none);setCls(r.jmsg,"jmsg"+(open?" open":"")+(msg?"":" empty"));
+ show(r.jmore,msg.length>JMSG_LONG);setText(r.jmore,open?L.ui_act_less:L.ui_show_more);setAttr(r.jmore,"aria-expanded",open?"true":"false");
+ const want=[];
+ if(reply&&v.phase==="approve")want.push(jbtn(st,"japprove",L.ui_job_approve,"primary"));
+ if(v.phase==="approve"&&(v.docs||[]).indexOf("plan")>=0)want.push(jbtn(st,"jreview",L.ui_job_review,""));
+ if(reply&&v.status==="paused")want.push(jbtn(st,"jcontinue",L.ui_job_continue,"warn"));
+ place(r.jbtns,want);show(r.jbtns,want.length>0);want.forEach(b=>{if(b.disabled!==busy)b.disabled=busy;});
+ show(r.jform,reply);setAttr(r.jin,"placeholder",L.ui_job_reply_ph);if(r.jsend.disabled!==busy)r.jsend.disabled=busy;
+ setText(r.jsend,busy?L.ui_job_sending:L.ui_job_send);
+ const working=act&&(j.status==="running"||j.status==="queued");setText(r.jnote,working?L.ui_job_working:"");
+ const turns=j.turns||[];show(r.jturns,turns.length>0);setText(r.jturnsS,fmt(L.ui_job_turns,{n:turns.length}));
+ const tsig=JSON.stringify(turns.map(t=>[t.at,t.prompt]));
+ if(st.jtsig!==tsig){st.jtsig=tsig;r.jturnsL.replaceChildren.apply(r.jturnsL,turns.slice().reverse().map(t=>{
+  const li=el("li"),p=el("span","",t.prompt);p.dir="auto";li.append(el("time","",shortStamp(t.at)),p);return li;}));}}
+function jErr(st,msg){const r=st.r;setText(r.jerr,msg||"");show(r.jerr,!!msg);setAttr(r.jin,"aria-invalid",msg?"true":null);if(msg)announce(msg);}
+async function sendReply(st,preset){
+ const v=st.v,j=v&&v.job;if(!j||S.jbusy[st.key]||!canAct())return;const r=st.r;
+ const text=preset!==undefined?preset:String(r.jin.value||"").trim();
+ if(!text){jErr(st,L.ui_job_reply_empty);refocus(r.jin);return;}
+ if(text.length>REQ_MAX){jErr(st,fmt(L.ui_job_reply_long,{max:REQ_MAX,n:text.length}));refocus(r.jin);return;}
+ jErr(st,"");S.jbusy[st.key]=true;patchJob(st,v,st.a);
+ const res=await req("/api/console/reply",{body:{job:j.id,text:text},timeout:30000});
+ S.jbusy[st.key]=false;
+ if(res.ok){if(preset===undefined)r.jin.value="";const msg=fmt(L.ui_job_sent,{project:v.project_name});toast(msg);announce(msg);retryNow();}
+ else jErr(st,cerr(res));
+ patchJob(st,st.v,st.a);}
+async function continueRun(st){
+ const v=st.v;if(!v||S.jbusy[st.key]||!canAct())return;jErr(st,"");S.jbusy[st.key]=true;patchJob(st,v,st.a);
+ const res=await req("/api/console/continue",{body:{key:st.key},timeout:30000});S.jbusy[st.key]=false;
+ if(res.ok){const msg=fmt(L.ui_job_continued,{project:v.project_name});toast(msg);announce(msg);retryNow();}else jErr(st,cerr(res));
+ patchJob(st,st.v,st.a);}
+// ---- tools: the run service, background jobs, closing idle runs, the health check
+function tlLabels(){
+ setText($("tl-h"),L.ui_tools);setText($("tl-close"),L.ui_doc_close);setText($("tl-svc-h"),L.ui_tl_svc_h);setText($("tl-jobs-h"),L.ui_tl_jobs_h);
+ setText($("tl-clear-h"),L.ui_tl_clear_h);setText($("tl-clear-p"),L.ui_tl_clear_p);setText($("tl-hours-l"),L.ui_tl_hours);
+ setText($("tl-preview"),L.ui_tl_preview);setText($("tl-doc-h"),L.ui_tl_doc_h);setText($("tl-doc-p"),L.ui_tl_doc_p);setText($("tl-doc-run"),L.ui_tl_doc_run);}
+async function openTools(){
+ if(!canAct())return;S.tlTrigger=document.activeElement;tlLabels();dlgOpen($("tl"),$("tl-close"));
+ setText($("tl-svc-msg"),L.ui_doc_loading);show($("tl-svc-btn"),false);
+ const s=await req(cpath("service"));svcRow("tl",s);await loadJobs();}
+function closeTools(){dlgShut($("tl"));refocus(S.tlTrigger);S.tlTrigger=null;}
+async function loadJobs(){
+ const ul=$("tl-jobs"),r=await req(cpath("jobs")),list=r.ok&&Array.isArray(r.jobs)?r.jobs:[],kids=[];
+ if(!r.ok)kids.push(el("li","ri",cerr(r)));else if(!list.length)kids.push(el("li","ri",L.ui_tl_jobs_none));
+ list.forEach(j=>{
+  const li=el("li","ri"),body=el("div","rb"),foot=el("div","rf"),tim=el("time","",shortStamp(j.updated||j.created));
+  body.append(el("span","rl",[j.project,j.run_id,engineName(j.engine)].filter(Boolean).join(" \u00b7 ")));
+  if(j.message){const m=el("span","rr2",j.message);m.dir="auto";body.append(m);}
+  const it=S.items.find(x=>x.v.run_id===j.run_id&&x.v.project_name===j.project);
+  if(it){const go=el("button","tog go",L.ui_risk_go);go.type="button";go.dataset.act="go";go.dataset.key=it.key;foot.append(go);}
+  if(j.can_cancel&&!it){const c=el("button","tog",L.ui_tl_job_cancel);c.type="button";c.dataset.act="jcancel";c.dataset.job=j.id;c.dataset.project=j.project;foot.append(c);}
+  if(foot.childNodes.length)body.append(foot);
+  li.append(el("span","rk jst-"+j.status,L["ui_job_status_"+j.status]||j.status),body,tim);kids.push(li);});
+ ul.replaceChildren.apply(ul,kids);}
+async function onToolsJobs(e){
+ const b=actOf(e.target);if(!b)return;
+ if(b.dataset.act==="go"){closeTools();goTo(b.dataset.key);return;}
+ if(b.dataset.act!=="jcancel")return;
+ const id=b.dataset.job;if(!S.tlArm[id]){S.tlArm[id]=true;setText(b,L.ui_tl_job_confirm);return;}   // two presses: a cancel aborts the run
+ delete S.tlArm[id];b.disabled=true;const r=await req("/api/console/cancel",{body:{job:id},timeout:30000});
+ if(r.ok){const msg=fmt(L.ui_tl_job_cancelled,{project:b.dataset.project||""});toast(msg);announce(msg);retryNow();await loadJobs();}
+ else{b.disabled=false;setText(b,L.ui_tl_job_cancel);announce(cerr(r));toast(cerr(r));}}
+async function clearRuns(apply){
+ const h=parseFloat(String($("tl-hours").value||"").replace(",","."));
+ if(!(h>=1&&h<=8760)){fieldErr("tl-hours-err",L.ui_tl_hours_err,$("tl-hours"));refocus($("tl-hours"));announce(L.ui_tl_hours_err);return;}
+ fieldErr("tl-hours-err","",$("tl-hours"));const out=$("tl-clear-out"),btn=apply&&S.tlApply?S.tlApply:$("tl-preview");btn.disabled=true;
+ const r=await req("/api/console/clear",{body:{hours:h,apply:!!apply},timeout:90000});btn.disabled=false;
+ if(!r.ok){out.replaceChildren(el("p","dlg-err",cerr(r)));announce(cerr(r));return;}
+ const n=(r.closed||[]).length,d=r.dropped|0;
+ if(apply){const msg=fmt(L.ui_tl_applied,{n:n,d:d});out.replaceChildren(el("p","dlg-p",msg));toast(msg);announce(msg);retryNow();return;}
+ if(!n&&!d){out.replaceChildren(el("p","dlg-p",L.ui_tl_none));announce(L.ui_tl_none);return;}
+ const ul=el("ul","rlist");(r.closed||[]).forEach(x=>{const li=el("li","ri0",[x.project,x.run_id,fmt(L.ui_tl_idle,{dur:dur(x.idle)}),x.title].filter(Boolean).join(" \u00b7 "));
+  li.dir="auto";ul.append(li);});
+ const b=el("button","btn cbtn danger",fmt(L.ui_tl_apply,{n:n}));b.type="button";b.dataset.act="clearapply";S.tlApply=b;
+ out.replaceChildren(el("p","dlg-p",fmt(L.ui_tl_would,{n:n,d:d})),ul,b);}
+async function runDoctor(){
+ const b=$("tl-doc-run"),sum=$("tl-doc-sum"),out=$("tl-doc-out");b.disabled=true;setText(b,L.ui_tl_doc_busy);
+ const r=await req("/api/console/doctor",{body:{},timeout:150000});b.disabled=false;setText(b,L.ui_tl_doc_run);
+ if(!r.ok){setText(sum,cerr(r));show(sum,true);show(out,false);announce(cerr(r));return;}
+ setText(sum,r.passed?L.ui_tl_doc_ok:L.ui_tl_doc_bad);show(sum,true);
+ out.replaceChildren.apply(out,String(r.text||"").split("\n").map(l=>el("span",/^\[!!\]/.test(l)?"bad":/^\[OK\]/.test(l)?"good":"",l+"\n")));
+ show(out,true);announce(sum.textContent);}
+
+// ---------------------------------------------------------------- risk radar: the newest risky actions across the listed runs
+function radarItems(hit){const out=[];hit.forEach(it=>{const live=OPEN_ST.indexOf(it.v.status)>=0?0:1;
+  (it.v.risks||[]).forEach(e=>out.push({e:e,it:it,live:live}));});
+ out.sort((x,y)=>(x.live-y.live)||((y.e.ts||0)-(x.e.ts||0)));return out;}     // open runs first: those can still be stopped
+function renderRadar(){
+ const box=$("radar"),list=$("radar-list"),tog=$("radar-tog"),hit=S.items.filter(matchesQ),all=radarItems(hit),c={high:0,medium:0,blocked:0};
+ hit.forEach(it=>{const k=it.v.risk_counts||{};c.high+=k.high|0;c.medium+=k.medium|0;c.blocked+=k.blocked|0;});
+ show(box,all.length>0);
+ if(!all.length){S.radar.recs.forEach(x=>{x.off=true;});S.radar.recs=[];S.radar.sig="";return;}
+ setData(box,"top",riskTop(c));setText($("radar-h"),L.ui_risk_h);setText($("radar-sum"),riskSum(c));setText($("radar-p"),L.ui_risk_p);
+ const open=S.radarAll,shown=all.slice(0,open?RADAR_CAP:RADAR_SHOW);
+ show(tog,all.length>RADAR_SHOW);setText(tog,open?L.ui_risk_less:fmt(L.ui_risk_all,{n:Math.min(all.length,RADAR_CAP)}));
+ setAttr(tog,"aria-expanded",open?"true":"false");
+ const sig=JSON.stringify([shown.map(x=>[x.e.id,x.e.count,x.e.ts,x.it.key]),open]);
+ if(S.radar.sig===sig||(!S.force&&pinned(list)))return;
+ S.radar.sig=sig;S.radar.recs.forEach(x=>{x.off=true;});S.radar.recs=[];
+ const kids=[];
+ shown.forEach(x=>{const v=x.it.v,name=v.project_name+" "+v.run_id,row=riskRow(x.e,{project:v.project,home:v.home||META.home||""},v.project_name+" \u00b7 "+v.run_id);
+  const go=el("button","tog go",L.ui_risk_go);go.type="button";go.dataset.act="go";go.dataset.key=x.it.key;
+  setAttr(go,"aria-label",fmt(L.ui_risk_go_aria,{name:name}));row.foot.append(go);kids.push(row.li);
+  const rec={n:row.tim,ts:x.e.ts,fn:rowTime,off:false};S.radar.recs.push(rec);paintTime(rec);});
+ list.replaceChildren.apply(list,kids);}
+function goTo(key){
+ let st=S.cards.get(key);
+ if(!st||!st.el.parentNode){S.filter.clear();S.q="";$("q").value="";S.finAll=true;lsSet("orkestra.dash.filter","[]");lsSet("orkestra.dash.q","");render();st=S.cards.get(key);}
+ if(!st)return;
+ if(st.kind==="item"&&!openOf(key).item)toggleItem(st);
+ const t=st.kind==="card"?st.el:(st.card&&!st.card.el.hidden?st.card.el:st.c.btn);
+ try{t.focus({preventScroll:true});}catch(e){}reveal(t);flash(t);}
+function onRadarClick(e){const b=actOf(e.target);if(b&&b.dataset.act==="go")goTo(b.dataset.key);}
+
 // ---------------------------------------------------------------- chrome: filters, summary, banners, connection
 function buildChips(){
  const nav=$("sum");S.chips={};nav.setAttribute("aria-label",L.ui_sum);
@@ -2231,7 +2976,7 @@ function renderConn(){
  banners();
  setAttr(chip,"title",footText());}
 function footText(){return fmt(L.ui_build,{version:META.version||"?",build:META.build||BUILD,ago:ago(nowS()-(META.started||nowS()))});}
-function renderFoot(){setText($("foot-build"),footText());setText($("foot-ro"),L.ui_readonly);}
+function renderFoot(){setText($("foot-build"),footText());setText($("foot-ro"),META.controls&&META.token?L.ui_ctl_foot:L.ui_readonly);}
 
 // ---------------------------------------------------------------- applying one answer of the server
 function trackTransitions(){
@@ -2244,7 +2989,7 @@ function trackTransitions(){
  S.prev=cur;S.prevNeed=need;}
 function render(){
  S.shown=sortItems(S.items.filter(matches));
- updateChips();layout();}
+ updateChips();layout();renderRadar();}
 function apply(data){
  if(S.loadErr&&S.loadErr.d.parentNode)S.loadErr.d.parentNode.removeChild(S.loadErr.d);
  S.data=data;S.items=data.map(v=>({v:v,key:keyOf(v),a:attnOf(v)}));S.many=S.items.length>MANY;
@@ -2258,8 +3003,12 @@ function onFail(kind,status){
  schedule();banners();renderConn();if(!S.data)showLoadError();}
 function onOk(data){
  S.inflight=false;S.started=true;S.fails=0;S.lastGoodMs=Date.now();
+ if(S.again){S.again=false;setTimeout(tick,0);}
  try{apply(data);S.renderErr=false;}catch(e){S.renderErr=true;try{console.error(e);}catch(x){}}
  schedule();banners();renderConn();measureBar();}
+// while the older runs load, the page shows placeholders: "No runs yet" would be false for those seconds
+function showSkeleton(){const w=el("div",""),d=el("div","skel");w.setAttribute("aria-hidden","true");
+ for(let i=0;i<3;i++)d.append(el("div","card"));w.append(d);place($("main"),[w]);}
 // the first answer never came: the skeleton cards must not sit there forever
 function showLoadError(){
  const sk=$("skel");if(sk&&sk.parentNode)sk.parentNode.removeChild(sk);
@@ -2269,7 +3018,8 @@ function showLoadError(){
  place($("main"),[S.loadErr.d]);}
 async function tick(){
  if(S.inflight||S.reloading)return;S.inflight=true;clearTimeout(S.timer);
- const ctl=typeof AbortController==="function"?new AbortController():null,to=ctl?setTimeout(()=>ctl.abort(),5000):0;
+ // the first answer with every finished run is read cold on the server (seconds on a busy machine): give it room
+ const ctl=typeof AbortController==="function"?new AbortController():null,to=ctl?setTimeout(()=>ctl.abort(),S.older?20000:5000):0;
  let data;
  try{
   const r=await fetch(url(),{cache:"no-store",signal:ctl?ctl.signal:undefined});
@@ -2300,6 +3050,14 @@ function onMainClick(e){
  if(act==="older"){const o=$("older");o.checked=true;lsSet("orkestra.dash.older","1");S.older=true;tick();return;}
  if(act==="clear"){S.filter.clear();S.q="";$("q").value="";lsSet("orkestra.dash.filter","[]");lsSet("orkestra.dash.q","");render();return;}
  if(!st)return;
+ if(act==="ctl"){openCtl(st,b.dataset.action,b);return;}
+ if(act==="doc"){openDoc(st,b.dataset.doc);return;}
+ if(act==="jmore"){const o=openOf(st.key);o.jmsg=!o.jmsg;saveOpen();patchJob(st,st.v,st.a);return;}
+ if(act==="jsend"){sendReply(st);return;}
+ if(act==="japprove"){sendReply(st,L.ui_job_approve_word);return;}
+ if(act==="jreview"){openDoc(st,"plan");return;}
+ if(act==="jcontinue"){continueRun(st);return;}
+ if(act==="risks"){const o=openOf(st.key);o.risk=!o.risk;saveOpen();patchRisk(st,st.v,st.a);return;}
  if(act==="tasks"){const o=openOf(st.key);o.tasks=!o.tasks;saveOpen();patchTasks(st,st.v,st.a);return;}
  if(act==="notices"){const o=openOf(st.key);o.notices=!o.notices;saveOpen();patchHealth(st,st.v,st.a);return;}
  if(act==="noticetxt"){toggleNote(b);return;}
@@ -2325,6 +3083,10 @@ function setHelp(on){
  S.help=on;setText($("help"),L.ui_keys);show($("help"),on);setAttr($("keys-btn"),"aria-expanded",on?"true":"false");
  if(on)announce(L.ui_keys);}
 function onKey(e){
+ if(S.ctl){if(e.key==="Escape"&&!S.ctlBusy[S.ctl.key])closeCtl();return;}     // the dialog owns the keyboard while it is open
+ if(dlgUp($("rd"))){if(e.key==="Escape")closeDoc();return;}
+ if(dlgUp($("nr"))){if(e.key==="Escape")closeNew();return;}
+ if(dlgUp($("tl"))){if(e.key==="Escape")closeTools();return;}
  if(e.ctrlKey||e.metaKey||e.altKey)return;
  const tag=e.target&&e.target.tagName?String(e.target.tagName).toLowerCase():"";
  if(e.key==="Escape"){const q=$("q");if(S.q||q.value){S.q="";q.value="";lsSet("orkestra.dash.q","");render();}
@@ -2350,6 +3112,7 @@ function onPrint(on){
  S.printing=on;
  if(on){const pl=$("printline");setText(pl,fmt(L.ui_print,{time:stamp(nowS()).slice(0,16),build:META.build||BUILD}));}
  S.cards.forEach(st=>{if(st.kind!=="card")return;
+  if(st.r.jturns)st.r.jturns.open=on;                       // the conversation history prints too
   if(on){setOpen(st,st.act,true);setOpen(st,st.det,true);if(st.v){patchFeed(st,st.v,st.a);patchDetails(st,st.v,st.a);}}
   else{const o=openOf(st.key);setOpen(st,st.act,o.act!==undefined?o.act:!S.many&&!!st.a&&st.a.group!=="paused"&&st.a.group!=="done");
    setOpen(st,st.det,!!o.det);}});}
@@ -2375,7 +3138,8 @@ function boot(){
  S.q=lsGet("orkestra.dash.q")||"";S.older=lsGet("orkestra.dash.older")==="1";
  const q=$("q");q.value=S.q;$("older").checked=S.older;
  q.addEventListener("input",()=>{S.q=q.value.trim();lsSet("orkestra.dash.q",S.q);if(S.data)render();});
- $("older").addEventListener("change",()=>{S.older=$("older").checked;lsSet("orkestra.dash.older",S.older?"1":"0");tick();});
+ $("older").addEventListener("change",()=>{S.older=$("older").checked;lsSet("orkestra.dash.older",S.older?"1":"0");
+  if(S.older&&!S.items.length)showSkeleton();clearTimeout(S.timer);if(S.inflight)S.again=true;else tick();});
  setText($("stale-msg"),L.ui_stale);setText($("stale-copy"),L.ui_stale_cmd);
  $("stale-copy").addEventListener("click",()=>doCopy(CMD_RESTART,$("stale-code"),$("stale-copy")));
  setText($("rerr-msg"),L.ui_render_error);setText($("rerr-reload"),L.ui_reload);$("rerr-reload").addEventListener("click",()=>location.reload());
@@ -2387,6 +3151,30 @@ function boot(){
  $("keys-on").addEventListener("change",()=>{S.keysOn=$("keys-on").checked;lsSet("orkestra.dash.keys",S.keysOn?"1":"0");});
  $("keys-btn").addEventListener("click",()=>setHelp(!S.help));
  $("main").addEventListener("click",onMainClick);
+ $("radar-list").addEventListener("click",onRadarClick);
+ if(canAct()){show($("acts"),true);setText($("new-lbl"),L.ui_new);setText($("tools-lbl"),L.ui_tools);
+  setAttr($("new-btn"),"aria-label",L.ui_new);setAttr($("tools-btn"),"aria-label",L.ui_tools);
+  setAttr($("new-btn"),"title",L.ui_new);setAttr($("tools-btn"),"title",L.ui_tools);
+  $("new-btn").addEventListener("click",openNew);$("tools-btn").addEventListener("click",openTools);}
+ $("nr-form").addEventListener("submit",submitNew);$("nr-cancel").addEventListener("click",closeNew);
+ $("nr-project").addEventListener("change",()=>{fieldErr("nr-project-err","",$("nr-project"));nrEngines();});
+ $("nr-engine").addEventListener("change",()=>fieldErr("nr-err",""));
+ $("nr-req").addEventListener("input",nrCount);$("nr-ok").addEventListener("change",()=>{if($("nr-ok").checked)fieldErr("nr-ok-err","",$("nr-ok"));});
+ $("nr-svc-btn").addEventListener("click",()=>startService("nr"));$("tl-svc-btn").addEventListener("click",()=>startService("tl"));
+ $("nr").addEventListener("cancel",e=>{if(S.nr.busy&&e.preventDefault)e.preventDefault();});
+ $("tl-close").addEventListener("click",closeTools);$("tl-jobs").addEventListener("click",onToolsJobs);
+ $("tl-preview").addEventListener("click",()=>clearRuns(false));$("tl-doc-run").addEventListener("click",runDoctor);
+ $("tl-clear-out").addEventListener("click",e=>{const b=actOf(e.target);if(b&&b.dataset.act==="clearapply")clearRuns(true);});
+ $("rd-close").addEventListener("click",closeDoc);
+ $("rd-tabs").addEventListener("click",e=>{let n=e.target;while(n&&!(n.dataset&&n.dataset.doc))n=n.parentNode;if(n)showDoc(n.dataset.doc);});
+ S.radarAll=lsGet("orkestra.dash.radar")==="1";
+ $("radar-tog").addEventListener("click",()=>{S.radarAll=!S.radarAll;lsSet("orkestra.dash.radar",S.radarAll?"1":"0");renderRadar();});
+ $("ctl-form").addEventListener("submit",submitCtl);
+ $("ctl-cancel").addEventListener("click",()=>{if(S.ctl&&!S.ctlBusy[S.ctl.key])closeCtl();});
+ $("ctl").addEventListener("cancel",e=>{if(S.ctl&&S.ctlBusy[S.ctl.key]&&e.preventDefault)e.preventDefault();});
+ $("ctl").addEventListener("close",()=>{if(S.ctl)closeCtl();});
+ $("ctl-reason").addEventListener("input",()=>{const n=String($("ctl-reason").value||"").replace(/\s+/g," ").trim().length;
+  if(n>REASON_MAX)ctlErr(fmt(L.ui_ctl_err_reason_long,{n:n}),true);else if(S.ctlBad)ctlErr("");});
  document.addEventListener("keydown",onKey);
  document.addEventListener("pointerdown",e=>{if(e&&e.button>0)return;S.pointer=Date.now();});
  ["pointerup","pointercancel","contextmenu","dragend"].forEach(t=>document.addEventListener(t,()=>{S.pointer=0;}));
@@ -2399,7 +3187,8 @@ function boot(){
  try{if(typeof ResizeObserver==="function"){const ro=new ResizeObserver(measureBar);[$("bar"),$("r1")].forEach(n=>{if(n)ro.observe(n);});}}catch(e){}
  measureBar();setInterval(secondTick,1000);tick();}
 if(typeof window!=="undefined")window.OrkDash={shortWhat:shortWhat,groupFeed:groupFeed,sortItems:sortItems,nextDelay:nextDelay,kindOf:kindOf,
- dur:dur,ago:ago,state:S,attnOf:attnOf,apply:apply};
+ dur:dur,ago:ago,state:S,attnOf:attnOf,apply:apply,riskSum:riskSum,openCtl:openCtl,submitCtl:submitCtl,goTo:goTo,
+ openNew:openNew,submitNew:submitNew,openTools:openTools,openDoc:openDoc,sendReply:sendReply};
 boot();
 </script></body></html>
 """
@@ -2439,13 +3228,14 @@ def plugin_version() -> str:
 _VERSION: Optional[str] = None
 
 
-def page_html(build: str = "", started: Optional[float] = None) -> str:
+def page_html(build: str = "", started: Optional[float] = None, token: str = "") -> str:
     """The dashboard page in the current language: `<html lang>`, the static texts and the label table. `build` is the
     id of the code that serves it (the page reloads itself when the server answers with another one); `started` is
-    when the server began (epoch seconds) and feeds the trust line in the footer."""
+    when the server began (epoch seconds) and feeds the trust line in the footer. `token` is the per-process secret the
+    page sends with Pause / Abort ("" = a read-only page: no control is shown)."""
     code = i18n.lang()
     meta = {"version": plugin_version(), "build": build, "started": _STARTED if started is None else started,
-            "workspace": paths.workspace_display()}
+            "workspace": paths.workspace_display(), "controls": bool(token), "token": token}
     page = PAGE.replace("__LANG__", code).replace("__BUILD__", html.escape(build, quote=True))
     page = page.replace("__CUR_EN__", ' aria-current="true"' if code == "en" else "")
     page = page.replace("__CUR_TR__", ' aria-current="true"' if code == "tr" else "")
@@ -2514,10 +3304,95 @@ class _Freshness:
         return self._stale
 
 
-def make_handler(project: Optional[Path], port: int, fresh: Optional[_Freshness] = None):
+# ---------------------------------------------------------------- control: Pause / Abort from the page
+# The page may change exactly two things, the person's own decisions: pause a run, abort a run. Anything else (resume,
+# approve, a phase) needs the chat that drives the run. A request names the run by its page key, which is looked up
+# among the runs this dashboard lists: no path, project or run id from the request is ever trusted. Every session that
+# worked on the run in the last CONTROL_SESSION_WINDOW gets a stop note (state.request_stop), so its next tool call is
+# refused with "stop now" (hookmain.deny_stopped): a status change alone does not stop a turn that is under way.
+
+CONTROL_ACTIONS = {"pause": "paused", "abort": "aborted"}
+# Every POST the page can send. Each one passes the same guard (Host, Origin, token, JSON body) before it is read.
+POST_ROUTES = frozenset({"/api/control", "/api/console/start", "/api/console/reply", "/api/console/cancel",
+                         "/api/console/continue", "/api/console/service", "/api/console/clear", "/api/console/doctor"})
+CONTROL_SESSION_WINDOW = 2 * 3600.0
+CONTROL_BODY_MAX = 32 * 1024                 # a run request may be a few thousand characters
+CONTROL_REASON_MAX = 300
+
+
+def _locate(key: str, project: Optional[Path] = None, workspace: Optional[Path] = None) -> Optional[Tuple[Path, Dict[str, Any]]]:
+    """(project, state) of the run whose page key is `key`, among the runs this dashboard can list; None otherwise."""
+    if not re.fullmatch(r"[0-9a-f]{12}", str(key or "")):
+        return None
+    projects = [project] if project else list(_project_dirs(workspace or paths.workspace_root()))
+    for proj in projects:
+        rdir = paths.runs_dir(proj)
+        if not rdir.is_dir():
+            continue
+        for d in rdir.iterdir():
+            st = read_json(d / "state.json")
+            if isinstance(st, dict) and st.get("run_id") and _view_key(proj, str(st["run_id"])) == key:
+                return proj, st
+    return None
+
+
+def _stop_sessions(project: Path, run_id: str, now: float) -> List[str]:
+    """Sessions to stop: the ones bound to the run, plus every session id its activity rows show in the window (a
+    background subagent shares its parent's id; a Cursor worker has its own)."""
+    from . import state as ST
+    out = [s["id"] for s in ST.run_sessions(project, run_id)]
+    for row in A.read_rows(project, run_id):
+        sid = str(row.get("sid") or "")
+        if sid and now - float(row.get("ts") or 0) <= CONTROL_SESSION_WINDOW:
+            out.append(sid)
+    return list(dict.fromkeys(out))
+
+
+def control_run(key: str, action: str, reason: str = "", project: Optional[Path] = None,
+                workspace: Optional[Path] = None, now: Optional[float] = None) -> Dict[str, Any]:
+    """Pause or abort a run for the person at the dashboard. {"ok": True, "status", "changed", "stopped"} or
+    {"ok": False, "error": <code>} (codes: bad_action, reason_long, not_found, closed, failed)."""
+    from . import runs as R
+    from . import state as ST
+    if action not in CONTROL_ACTIONS:
+        return {"ok": False, "error": "bad_action"}
+    text = " ".join(str(reason or "").split())
+    if len(text) > CONTROL_REASON_MAX:
+        return {"ok": False, "error": "reason_long"}
+    found = _locate(key, project, workspace)
+    if not found:
+        return {"ok": False, "error": "not_found"}
+    proj, st = found
+    rid, status = str(st["run_id"]), CONTROL_ACTIONS[action]
+    if st.get("status") not in OPEN_STATUSES:
+        return {"ok": False, "error": "closed", "status": st.get("status")}
+    stamp = time.time() if now is None else now
+    text = text or i18n.t("monitor.ctl_reason_default")
+    try:
+        changed = R.set_status(proj, rid, status, text, source="dashboard", who={"agent_type": "dashboard", "by": "dashboard"})
+    except Exception as exc:                        # a run closed meanwhile, a lock held too long: say so, never crash
+        return {"ok": False, "error": "closed" if "closed run" in str(exc) else "failed", "detail": _text_of(exc, 160)}
+    stopped = ST.request_stop(proj, rid, status, _stop_sessions(proj, rid, stamp), reason=text, now=stamp)
+    out = {"ok": True, "status": status, "changed": bool(changed), "stopped": len(stopped), "run_id": rid,
+           "project_name": proj.name}
+    job = CO.job_for(proj, rid)
+    if action == "abort" and job and job.get("status") in CO.JOB_OPEN:
+        # a headless run's process is the run service's child: its cancel stops the whole process group at once
+        try:
+            CO.cancel(str(job.get("id")))
+            out["job_cancelled"] = True
+        except CO.ConsoleError as exc:
+            out["job_cancelled"] = False
+            out["job_error"] = exc.code
+    return out
+
+
+def make_handler(project: Optional[Path], port: int, fresh: Optional[_Freshness] = None, controls: bool = True,
+                 token: str = ""):
     from http.server import BaseHTTPRequestHandler
 
     allowed_hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
+    allowed_origins = {f"http://127.0.0.1:{port}", f"http://localhost:{port}"}
 
     class H(BaseHTTPRequestHandler):
         server_version = "orkestra-dashboard"
@@ -2536,6 +3411,12 @@ def make_handler(project: Optional[Path], port: int, fresh: Optional[_Freshness]
                 self.send_header("X-Orkestra-Stale", "1" if fresh.stale() else "0")
             self.send_header("Content-Security-Policy",
                              "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'")
+            # `--all` answers run to megabytes every 2 s: a browser that accepts gzip gets about a tenth of that
+            if len(body) > 2048 and "gzip" in (self.headers.get("Accept-Encoding") or "").lower():
+                import gzip
+                body = gzip.compress(body, compresslevel=4)
+                self.send_header("Content-Encoding", "gzip")
+                self.send_header("Vary", "Accept-Encoding")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -2551,19 +3432,126 @@ def make_handler(project: Optional[Path], port: int, fresh: Optional[_Freshness]
             code = (params.get("lang") or [""])[0]
             if path in ("/", "/index.html"):
                 with i18n.use_lang(code):
-                    body = page_html(fresh.build if fresh else "", fresh.started_at if fresh else None)
+                    body = page_html(fresh.build if fresh else "", fresh.started_at if fresh else None,
+                                     token=token if controls else "")
                 self._send(200, body.encode("utf-8"), "text/html; charset=utf-8")
             elif path == "/api/runs":
                 try:
                     with i18n.use_lang(code):
-                        data = discover(project, include_all=(params.get("all") or [""])[0] == "1")
+                        data = discover(project, include_all=(params.get("all") or [""])[0] == "1", cache=True)
                     body = _json_bytes(data)
                 except Exception as exc:     # answer with an error the page can name, never a dropped connection
                     self._send(500, _json_bytes({"error": type(exc).__name__}), "application/json")
                     return
                 self._send(200, body, "application/json")
+            elif path.startswith("/api/console/"):
+                self._console_get(path, params, code)
             else:
                 self._send(404, b"not found", "text/plain")
+
+        def _answer(self, res: Dict[str, Any], status: int = 200) -> None:
+            self._send(status, _json_bytes(res), "application/json")
+
+        def _console_get(self, path: str, params: Dict[str, List[str]], code: str) -> None:
+            """Read-only console data: no token needed (a page elsewhere cannot read the answer, and nothing changes)."""
+            one = lambda name: str((params.get(name) or [""])[0])          # noqa: E731
+            try:
+                with i18n.use_lang(code):
+                    if path == "/api/console/service":
+                        res = dict(CO.service_status(), ok=True, controls=bool(controls and token))
+                    elif path == "/api/console/projects":
+                        res = dict(CO.projects(code), ok=True)
+                    elif path == "/api/console/engines":
+                        res = dict(CO.engines(one("project"), code), ok=True)
+                    elif path == "/api/console/jobs":
+                        res = {"ok": True, "jobs": CO.jobs()}
+                    elif path == "/api/console/doc":
+                        found = _locate(one("key"), project)
+                        if not found:
+                            raise CO.ConsoleError("not_found", status=404)
+                        res = CO.doc(found[0], str(found[1]["run_id"]), one("name"))
+                    else:
+                        raise CO.ConsoleError("not_found", status=404)
+            except CO.ConsoleError as exc:
+                self._answer(exc.answer(), exc.status)
+                return
+            except Exception as exc:                # an answer the page can name, never a dropped connection
+                self._answer({"ok": False, "error": "failed", "detail": type(exc).__name__}, 500)
+                return
+            self._answer(res)
+
+        def _refuse(self, code: int, error: str) -> None:
+            self._send(code, _json_bytes({"ok": False, "error": error}), "application/json")
+
+        def do_POST(self) -> None:  # noqa: N802
+            # A web page on any other site can send a POST to 127.0.0.1 (no CORS preflight for a "simple" request):
+            # Host, Origin, a JSON body and the per-process token that only this server's own page carries all have
+            # to match before anything is read.
+            path = self.path.partition("?")[0]
+            if self.headers.get("Host", "") not in allowed_hosts:
+                self._refuse(403, "host")
+                return
+            if path not in POST_ROUTES:
+                self._refuse(404, "not_found")
+                return
+            if not controls or not token:
+                self._refuse(403, "read_only")
+                return
+            site = (self.headers.get("Sec-Fetch-Site") or "same-origin").lower()
+            if self.headers.get("Origin", "") not in allowed_origins or site != "same-origin":
+                self._refuse(403, "origin")
+                return
+            if not hmac.compare_digest(self.headers.get("X-Orkestra-Token", ""), token):
+                self._refuse(403, "token")
+                return
+            if not (self.headers.get("Content-Type") or "").lower().startswith("application/json"):
+                self._refuse(415, "content_type")
+                return
+            try:
+                size = int(self.headers.get("Content-Length") or "0")
+            except ValueError:
+                size = -1
+            if size <= 0 or size > CONTROL_BODY_MAX:
+                self._refuse(413 if size > CONTROL_BODY_MAX else 400, "body")
+                return
+            try:
+                req = json.loads(self.rfile.read(size).decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                req = None
+            if not isinstance(req, dict):
+                self._refuse(400, "body")
+                return
+            code = str(req.get("lang") or "")
+            text = lambda name: str(req.get(name) or "")                   # noqa: E731
+            status = 200
+            try:
+                with i18n.use_lang(code):
+                    if path == "/api/control":
+                        res = control_run(text("key"), text("action"), text("reason"), project=project)
+                        status = 200 if res.get("ok") else {"not_found": 404, "closed": 409, "failed": 500}.get(
+                            str(res.get("error")), 400)
+                    elif path == "/api/console/start":
+                        res = CO.start(text("project"), text("request"), text("engine"), text("mode") or "autopilot", code)
+                    elif path == "/api/console/reply":
+                        res = CO.reply(text("job"), text("text"), code)
+                    elif path == "/api/console/cancel":
+                        res = CO.cancel(text("job"), code)
+                    elif path == "/api/console/continue":
+                        found = _locate(text("key"), project)
+                        if not found:
+                            raise CO.ConsoleError("not_found", status=404)
+                        res = CO.continue_run(found[0], str(found[1]["run_id"]), code)
+                    elif path == "/api/console/service":
+                        res = CO.start_service()
+                    elif path == "/api/console/clear":
+                        res = CO.clear_runs(req.get("hours"), bool(req.get("apply")))
+                    else:                                   # /api/console/doctor
+                        res = CO.doctor(code)
+            except CO.ConsoleError as exc:
+                res, status = exc.answer(), exc.status
+            except Exception as exc:                # an answer the page can name, never a dropped connection
+                res, status = {"ok": False, "error": "failed", "detail": type(exc).__name__}, 500
+            self._send(status, _json_bytes(res), "application/json")
 
     return H
 
@@ -2730,8 +3718,10 @@ def _busy_outcome(port: int, exc: OSError, open_browser: bool, replace: bool) ->
     return 2
 
 
-def dashboard(project: Optional[Path], port: int, open_browser: bool, replace: bool = False) -> int:
+def dashboard(project: Optional[Path], port: int, open_browser: bool, replace: bool = False,
+              read_only: bool = False) -> int:
     from http.server import ThreadingHTTPServer
+    import secrets
 
     if os.environ.get("CLAUDECODE") and not sys.stdout.isatty():
         sys.stderr.write("orkestra: dashboard is a long-running server — the user starts it in their own terminal "
@@ -2739,6 +3729,7 @@ def dashboard(project: Optional[Path], port: int, open_browser: bool, replace: b
         return 2
 
     fresh = _Freshness()
+    token = "" if read_only else secrets.token_urlsafe(24)     # per process: only the page this server serves has it
     reexec = bool(os.environ.pop(REEXEC_ENV, ""))
     srv = None
     last_exc: Optional[OSError] = None
@@ -2746,7 +3737,8 @@ def dashboard(project: Optional[Path], port: int, open_browser: bool, replace: b
     for round_ in range(2):
         for attempt in range(40 if patient else 1):      # the previous incarnation may still be closing its socket
             try:
-                srv = ThreadingHTTPServer(("127.0.0.1", port), make_handler(project, port, fresh))
+                srv = ThreadingHTTPServer(("127.0.0.1", port), make_handler(project, port, fresh, controls=not read_only,
+                                                                              token=token))
                 break
             except OSError as exc:
                 last_exc = exc
@@ -2762,7 +3754,7 @@ def dashboard(project: Optional[Path], port: int, open_browser: bool, replace: b
         _emit(i18n.t("monitor.port_busy", port=port, exc=last_exc) + "\n", sys.stderr)
         return 2
     url = f"http://127.0.0.1:{port}/"
-    _emit(i18n.t("monitor.dashboard_up", url=url) + "\n")
+    _emit(i18n.t("monitor.dashboard_up" if read_only else "monitor.dashboard_up_ctl", url=url) + "\n")
     sys.stdout.flush()
     if open_browser and not reexec:
         try:

@@ -80,7 +80,7 @@ Terminalde (`python3 $ORKESTRA_ROOT/plugins/orkestra/bin/orkestra …` veya `./p
 
 | Komut | İş |
 |---|---|
-| `watch` · `dashboard --open` | Canlı görünüm (terminal · http://127.0.0.1:47616). Salt-okunur. |
+| `watch` · `dashboard --open` | Canlı görünüm (terminal · http://127.0.0.1:47616). Sayfa riskli ajan işlemlerini gösterir ve bir run'ı duraklatabilir ya da iptal edebilir (`--read-only` kontrolleri gizler). |
 | Bridge chat UI | http://127.0.0.1:47615/ · proje/Claude/Cursor/Copilot seç; faz haritası, ajan ağı, görevler ve son hook hareketlerini izle. |
 | `status -p <proje>` · `context` | Run'ın fazı, görevleri, kanıt eksikleri. |
 | `next -p <proje>` | Sıradaki tek adım. Aynı durumda hep aynı cevap. |

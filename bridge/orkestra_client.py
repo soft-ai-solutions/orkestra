@@ -8,6 +8,7 @@
     orkestra_client.py wait <job-id> [--timeout 1800]       # block until the job stops running, print its message
     orkestra_client.py cancel --chat-id ID                  # stop the latest open job of that chat
     orkestra_client.py runs [--json]                        # live view: every open run, its phase, what it does now
+    orkestra_client.py projects                             # project folders the bridge may start (allowlist applied)
 
 Reads the bearer token from ~/.orkestra/bridge.secret.json (same machine). Prints JSON (or the message for `wait`).
 Exit codes: 0 ok · 1 bridge/HTTP error · 2 usage.
@@ -16,8 +17,10 @@ ORKESTRA_LANG / ~/.orkestra/config.json / the OS locale say so. The JSON the bri
 """
 from __future__ import annotations
 
+import errno
 import json
 import os
+import socket
 import sys
 import time
 import urllib.error
@@ -39,18 +42,49 @@ def _cfg() -> Dict[str, Any]:
         sys.exit(t("bridge.client.not_configured", script=HERE / "orkestra_bridge.py"))
 
 
+# A connection that never reached the bridge is safe to try again, whatever the method: the request was not sent.
+# Seen in the wild: EADDRNOTAVAIL (no free local port for a moment on a busy Mac) and ECONNREFUSED while the bridge
+# restarts. A request that reached the bridge is never repeated (a second POST /jobs would start a second job).
+CONNECT_ERRNOS = {errno.ECONNREFUSED, errno.EADDRNOTAVAIL, errno.ENETUNREACH, errno.EHOSTUNREACH}
+RETRY_DELAYS = (0.3, 1.0, 2.0)
+# urllib would route a 127.0.0.1 request through HTTP(S)_PROXY when one is set in the caller's environment
+_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def _body(raw: bytes) -> Any:
+    """The JSON of an answer; a non-JSON answer (a proxy page, a half-written body) becomes an error object."""
+    try:
+        return json.loads(raw or b"{}")
+    except ValueError:
+        return {"error": raw.decode("utf-8", "replace").strip()[:300] or "empty answer"}
+
+
+def _not_sent(exc: BaseException) -> bool:
+    reason = getattr(exc, "reason", exc)
+    return isinstance(reason, OSError) and getattr(reason, "errno", None) in CONNECT_ERRNOS
+
+
 def _call(method: str, path: str, body: Optional[Dict[str, Any]] = None) -> Tuple[int, Any]:
     cfg = _cfg()
     url = f"http://{cfg.get('host', '127.0.0.1')}:{cfg.get('port', 47615)}{path}"
-    req = urllib.request.Request(url, method=method, data=json.dumps(body).encode() if body is not None else None,
-                                 headers={"Content-Type": "application/json", "Authorization": f"Bearer {cfg['token']}"})
-    try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            return r.status, json.loads(r.read() or b"{}")
-    except urllib.error.HTTPError as e:
-        return e.code, json.loads(e.read() or b"{}")
-    except urllib.error.URLError as e:
-        return 0, {"error": t("bridge.client.unreachable", reason=e.reason, script=HERE / "orkestra_bridge.py")}
+    data = json.dumps(body).encode() if body is not None else None
+    for attempt in range(len(RETRY_DELAYS) + 1):
+        req = urllib.request.Request(url, method=method, data=data,
+                                     headers={"Content-Type": "application/json", "Authorization": f"Bearer {cfg['token']}"})
+        try:
+            with _OPENER.open(req, timeout=30) as r:
+                return r.status, _body(r.read())
+        except urllib.error.HTTPError as e:
+            return e.code, _body(e.read())
+        except (urllib.error.URLError, OSError) as e:
+            if _not_sent(e) and attempt < len(RETRY_DELAYS):
+                time.sleep(RETRY_DELAYS[attempt])
+                continue
+            reason = getattr(e, "reason", e)
+            if isinstance(reason, (socket.timeout, TimeoutError)) or isinstance(e, (socket.timeout, TimeoutError)):
+                reason = "timed out after 30 s"
+            return 0, {"error": t("bridge.client.unreachable", reason=reason, script=HERE / "orkestra_bridge.py")}
+    return 0, {"error": "unreachable"}            # not reached: the loop always returns
 
 
 def _opt(args: List[str], name: str, default: Optional[str] = None) -> Tuple[Optional[str], List[str]]:
@@ -102,6 +136,8 @@ def main(argv: List[str]) -> int:
             code, body = _call("GET", f"/jobs/{args[0]}")
         else:
             code, body = _call("GET", "/jobs" + (f"?chat_id={urllib.parse.quote(chat)}" if chat else ""))
+    elif cmd == "projects":
+        code, body = _call("GET", "/projects")
     elif cmd == "runs":
         code, body = _call("GET", "/runs")
         if code == 200 and "--json" not in args:

@@ -6,6 +6,54 @@ Orkestra now serves people in English and Turkish (English is the default), runs
 with Python 3.9 to 3.14, and its repository documentation is available in both languages. Entries up to 1.6.0 below
 were written in Turkish and are kept as they were.
 
+### Telegram through OpenClaw: plain-language requests, a client that rides out hiccups
+- **Plain words become a run:** the OpenClaw plugin gives the agent `orkestra_run` and `orkestra_status`. "Fix the
+  notification sound in namaz vakitleri" written in Telegram starts a tracked, guarded headless run with notifications
+  and Reply routing, through the same checks as `/run` (open run in the project: refused; no reliable run list: not
+  started). The agent's guidance now says to start work this way instead of asking the owner to retype it, and never
+  to answer a run's question itself.
+- **Project names as people say them:** `/run`, `/yap` and the tool match "Namaz Vakitleri" or "namaz_vakitleri" to the
+  `namaz-vakitleri` folder when exactly one folder fits, and list candidates otherwise.
+- **`orkestra_client.py`** retries a connection that never reached the bridge (refused during a restart, `EADDRNOTAVAIL`
+  on a busy Mac: seen on 2026-10-28 as "bridge not reachable"), never repeats a request that did, ignores
+  `HTTP(S)_PROXY` for the local bridge, prints JSON for every answer (no traceback for a non-JSON body or a timeout) and
+  gains `projects`.
+
+### Dashboard: one page for the run lifecycle
+- **New run from the page:** pick a workspace project, the agent (Claude Code, Cursor, Copilot or Pi, with the reason
+  when one is not available), autopilot or your own plan approval, describe the work and start it. Each missing field is
+  named under itself. The dashboard server talks to the bridge with the bridge token (read from
+  `~/.orkestra/bridge.secret.json`, never sent to the browser), so the token-protected workbench on port 47615 is no
+  longer needed; it stays for those who use it, and the bridge itself is unchanged. When the bridge is not running the
+  page offers to start it (set up first when it never was).
+- **Conversation on the run card:** a headless run's card shows the agent's last message (its question, its plan) with
+  an answer box, **Approve the plan** in the approval phase and **Continue the run** when it is paused (the dashboard's
+  stop notes are lifted for it). Abort of a headless run also cancels its bridge job, which stops the agent's process
+  group at once.
+- **Run documents** (request, context, spec, plan, verification, report) open in a reader on the page, by name only.
+- **Tools:** the run service state, background jobs (cancel needs a second press), closing idle runs with a preview
+  first (`orkestra clear`) and the health check (`orkestra doctor`).
+- Every console POST passes the same Host, Origin, token and JSON checks as Pause / Abort; `--read-only` turns them all
+  off. `bridge/tests/test_dashboard_console.py` drives the whole flow against a real bridge with the fake agent.
+
+### Dashboard: risky actions, Pause and Abort, a faster page
+- **Risky actions on screen:** `risk.py` classifies every recorded tool call and every refused one from its text alone
+  (shell-aware, so `grep "rm -rf"` is not a match): force push, recursive delete outside the project, destructive SQL,
+  database reset, a download piped into a shell, sudo, disk wipes, deploys and publishes, infrastructure teardown,
+  reading secrets, network uploads, package installs and more, high or medium. A refused call now keeps its command in
+  the activity row (`cmd`, masked), so the page names what was blocked. Each run card lists its risky actions, the feed
+  marks them, and a panel at the top shows the newest across all listed runs.
+- **Pause and Abort from the page:** a confirmed click changes the status (with the reason in the ledger) and leaves a
+  stop note for every session that worked on the run in the last two hours; the PreToolUse hook refuses those sessions'
+  next calls with a stop message until the person writes in that chat, the run is resumed, or an hour passes. The
+  endpoint checks Host, Origin, a JSON body and a per-process token; `orkestra dashboard --read-only` turns it off.
+- **Modern, responsive page:** new palette (contrast-tested in both themes), soft depth, a brand mark, a dialog that is a
+  bottom sheet on phones, a toast after an action.
+- **Faster:** closed runs' views are reused while their files do not change and answers are gzip-compressed for the
+  browser: `--all` over 127 runs went from about 0.46 s and 1.5 MB per 2 s poll to about 0.05 s and 0.22 MB.
+- **Activity log:** a shell command is now recorded up to 480 characters (a risky tail stays on record), and rotation
+  keeps at most three quarters of the size limit, so long rows never make every append rotate the file.
+
 ### Funding
 - **Support the project:** `.github/FUNDING.yml` enables the GitHub Sponsor button (Buy Me a Coffee),
   [SUPPORT.md](SUPPORT.md) documents help and membership links, both READMEs gain a Support / Destek section, and

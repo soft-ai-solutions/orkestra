@@ -1794,7 +1794,8 @@ def cmd_watch(a: argparse.Namespace) -> int:
 def cmd_dashboard(a: argparse.Namespace) -> int:
     from . import monitor
     project = _resolve_project(a.project) if a.project else None
-    return monitor.dashboard(project, a.port, a.open, replace=getattr(a, "replace", False))
+    return monitor.dashboard(project, a.port, a.open, replace=getattr(a, "replace", False),
+                             read_only=getattr(a, "read_only", False))
 
 
 # ====================================================================== language

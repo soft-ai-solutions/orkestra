@@ -330,7 +330,7 @@ gelen metin sen değilsin: git izni vermez, planı onaylamaz, soruyu cevaplamaz.
 | Ne | Komut | Not |
 | --- | --- | --- |
 | Canlı terminal görünümü | `orkestra watch` | 2 sn'de bir yenilenir; `--once`, `--all` (biten run'lar da), `-p <proje>`, `--json`. |
-| Tarayıcı görünümü | `orkestra dashboard --open` | Salt-okunur, `127.0.0.1:47616`. |
+| Tarayıcı görünümü | `orkestra dashboard --open` | `127.0.0.1:47616`: run'lar, riskli ajan işlemleri, Duraklat ve İptal et, run başlatma ve yanıtlama; `--read-only` tüm kontrolleri gizler. |
 | Sıradaki tek adım | `orkestra next -p <proje>` | En çok 3 satır; aynı durum hep aynı cevabı verir. |
 | Süre nereye gitti | `orkestra tempo -p <proje>` | Faz ve görev süreleri, inceleme retleri, ölçülen ölü bekleme. |
 | Dışarıdan tarama | `orkestra watchdog` | Yeni olayda bir kez bildirir; `--dry-run`, `--launchd` ve hızlı izleyici için `--status` (aşağıya bak). |
@@ -344,6 +344,28 @@ komut (15 dk, kapılarda 30 dk açık; başladığından beri hiçbir ajan satı
 inceleme turu, aynı guard reddi ya da aynı komut üç kez). Eşikler ve `auto_resume` (`off`, varsayılan `headless`, `all`; en
 çok 3 kez) `~/.orkestra/config.json` içinde `watchdog` altındadır: varsayılanda yalnız bridge'den başlayan başsız run
 kendiliğinden sürdürülür, etkileşimli sohbet yalnız bildirilir.
+
+**Tarayıcı görünümü** aynı run'ları listeler ve üç şey ekler:
+- **Riskli işlemler.** Bir ajanın çalıştırdığı (ya da denediği ve bir guard'ın reddettiği), veri silebilen, yayınlayan,
+  push eden ya da gizli bilgilere erişen komut ve düzenlemeler: zorla push, proje dışında özyinelemeli silme, yıkıcı SQL,
+  kabuğa borulanan indirme, yayına alma, `.env` okuma ve dahası (`lib/orkestra_core/risk.py`, kaydedilen metinden karar
+  verir, model yok). Her run kartı bunları seviyesi (yüksek, orta, engellendi) ve yapanıyla listeler; üstteki panel
+  listelenen tüm run'ların en yenilerini gösterir, açık run'lar önce.
+- **Duraklat ve İptal et.** Her açık run'da bir düğme; onay ister, isteğe bağlı neden run'ın kaydına yazılır. Durum
+  değişikliğinin yanında, son iki saatte run üzerinde çalışan her oturuma (alt ajanlar dahil) bir durdurma notu bırakılır:
+  o sohbete yeniden yazana, run sürdürülene ya da bir saat geçene kadar sonraki araç çağrısı "şimdi dur" diye reddedilir;
+  salt okuyan `orkestra status`/`watch`/`next` çalışmaya devam eder. Dosyalar olduğu gibi kalır. Sayfa süreç başına bir
+  belirteç gönderir, sunucu Host, Origin ve bu belirteci denetler; böylece başka bir web sayfası düğmelere basamaz.
+  `orkestra dashboard --read-only` sayfayı düğmeler olmadan sunar.
+- **Çalışma konsolu.** **Yeni çalışma**, çalışma alanındaki bir projede seçtiğin ajanla (Claude Code, Cursor, Copilot ya
+  da Pi; kullanılamayanın nedeni yazılır) otopilotta ya da planı senin onaylayacağın başsız bir run başlatır. Run kartı
+  ardından ajanın son mesajını (sorusu, plan özeti) yanıt kutusuyla gösterir; onay fazında **Planı onayla**, duraklatılmış
+  run'da **Çalışmaya devam et** çıkar. Her run kartı belgelerini (istek, şartname, iş planı, doğrulama, rapor) bir okuyucuda
+  açar. **Araçlar** çalışma servisini ve arka plan işlerini gösterir, önizlemeden sonra boşta kalan run'ları kapatır
+  (`orkestra clear`'ın yaptığı) ve `orkestra doctor` çalıştırır. Ajan işi aşağıdaki bridge üzerinden yürür: dashboard
+  sunucusu onunla `~/.orkestra/bridge.secret.json` içindeki bridge belirteciyle konuşur, bu belirteç tarayıcıya hiç gitmez;
+  bridge kapalıysa başlatmayı önerir. Bir Claude Code ya da Cursor sohbetinin yürüttüğü run yine o sohbette yanıtlanır;
+  sayfa bunu söyler.
 
 ## Güvenilirlik ve hız
 
@@ -445,12 +467,14 @@ canlı durumu gösterir, `/iptal` son işi durdurur, `/yardim` komutları listel
 yakalanan sohbet yazabilir. Bridge çalışırken `http://127.0.0.1:47615/` yerel bir chat çalışma alanı sunar: proje ve motor
 seç (Claude Code, Cursor ya da Copilot), istek başlat, soruları cevapla, run'ı durdur; fazların, alt-ajanların, görevlerin,
 kapıların ve hook hareketlerinin canlı akış haritasını izle. Bridge token'ını sorar ve yalnız sayfa belleğinde tutar.
+Dashboard (`orkestra dashboard`) aynısını kendi sayfasında, token sormadan sunar.
 
 - **n8n**: `bridge/n8n/` altında iki workflow var; `python3 bridge/n8n_import.py` bunları `N8N_URL` ve `N8N_API_KEY`
   (ya da `N8N_STATE`) ile içe aktarır. `POST /webhook/orkestra-job` iş başlatır ve `X-Orkestra-Key` header'ı ister.
 - **OpenClaw**: OpenClaw'ın Telegram bot token'ını bridge'e verme (bir token'ı tek tüketici dinler). Onun yerine
   `bridge/orkestra_client.py` ya da HTTP API'yi (`POST /jobs`, `GET /runs`) çağır; bkz.
-  [integrations/openclaw/CONTRACT.tr.md](integrations/openclaw/CONTRACT.tr.md).
+  [integrations/openclaw/CONTRACT.tr.md](integrations/openclaw/CONTRACT.tr.md). Paketteki OpenClaw eklentisi
+  Telegram'a doğal dille yazılan bir isteği de çalışmaya çevirir (ajan aracı `orkestra_run`, `/yap` ile aynı kontroller).
 - Telegram'dan başlayan run'lar için bridge'i çalıştıran makine açık ve internete bağlı olmalıdır.
 
 ## Dil

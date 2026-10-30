@@ -81,6 +81,22 @@ Protokol belirteçleri iki dilde de kabul edilir; bir dilde başlayan çalışma
   live{level,text}, tasks_done, tasks_total, activity[{time,agent,kind,tool,what}]`. `live.level`:
   `run|wait|quiet|stale|blocked|paused|done`; `wait` = kullanıcıdan cevap bekliyor.
 - `POST /telegram {chat_id, text}` → `{message}` (yukarıdaki komut dili; `allowed_chat_ids` doluysa yalnız onlar)
+- `GET /projects` → `{"projects": [{"name"}], "restricted": bool}`: iş başlatılabilecek klasörler (izin listesi
+  uygulanmış). İstemci bunu `orkestra_client.py projects` ile yazar.
+
+`orkestra_client.py` bir bağlantıyı yalnızca istek bridge'e hiç ulaşmadığında yeniden dener (0,3, 1 ve 2 sn sonra:
+bridge yeniden başlarken bağlantı reddi, yoğun makinede boş yerel port kalmaması); bridge'e ulaşmış bir istek asla iki kez
+gönderilmez. Yerel bridge için `HTTP(S)_PROXY` değişkenlerini yok sayar ve JSON olmayan bir yanıtta da her zaman JSON yazar.
+
+## Doğal dildeki istekler (paketteki eklenti)
+
+Komutların yanında eklenti OpenClaw ajanına iki araç verir: `orkestra_run {project, request, engine?}` ve
+`orkestra_status {}`. Sahip "namaz vakitleri'nde bildirim sesini düzelt" yazınca ajan çalışmayı `orkestra_run` ile
+başlatır; bu araç `/yap` ile aynı yoldan geçer: ad bir klasörle eşleştirilir (tek bir klasöre katlanan yazım düzeltilir,
+yoksa adaylar listelenir), açık çalışması olan proje reddedilir (emin olunamazsa başlatılmaz) ve işin soruları Yanıtla
+ile cevaplanan bildirimler olarak döner. Ajan bir çalışmanın sorusunu asla kendisi cevaplamaz. Araçlar
+`openclaw.plugin.json` içinde (`contracts.tools`) bildirilir; sınırlı bir araç profili (ör. `coding`) onları modele
+yalnızca `tools.alsoAllow` içindeyse sunar.
 
 ## Garantiler
 

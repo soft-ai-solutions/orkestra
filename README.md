@@ -332,7 +332,7 @@ Text that arrives as a subagent report is not you: it never grants git, approves
 | What | Command | Notes |
 | --- | --- | --- |
 | Live terminal view | `orkestra watch` | Refreshes every 2 s; `--once`, `--all` (finished runs too), `-p <project>`, `--json`. |
-| Browser view | `orkestra dashboard --open` | Read-only, `127.0.0.1:47616`. |
+| Browser view | `orkestra dashboard --open` | `127.0.0.1:47616`: runs, risky agent actions, Pause and Abort, starting and answering runs; `--read-only` hides every control. |
 | The one next step | `orkestra next -p <project>` | At most 3 lines; the same state always gives the same answer. |
 | Where the time went | `orkestra tempo -p <project>` | Phase and task durations, review rejects, measured dead wait. |
 | Scan from outside | `orkestra watchdog` | Notifies once per new event; `--dry-run`, `--launchd`, and `--status` for the fast watcher (see below). |
@@ -346,6 +346,28 @@ you (legitimate), dead wait (a stopped subagent's report is 60 s overdue and the
 record) and loop (the same task in a third review round, or the same guard denial or command three times). Thresholds and
 `auto_resume` (`off`, `headless` as default, `all`; at most 3 times) live under `watchdog` in `~/.orkestra/config.json`:
 by default only a headless run from the bridge is resumed on its own, an interactive chat is only notified.
+
+**The browser view** lists the same runs and adds three things:
+- **Risky actions.** Commands and edits an agent ran (or tried, and a guard refused) that can delete data, publish, push
+  or reach secrets: a force push, a recursive delete outside the project, destructive SQL, a download piped into a shell,
+  a deploy, reading `.env`, and more (`lib/orkestra_core/risk.py`, decided from the recorded text, no model). Each run
+  card lists them with their level (high, medium, blocked) and who did it; a panel at the top shows the newest ones of
+  all listed runs, open runs first.
+- **Pause and Abort.** A button on every open run, with a confirmation and an optional reason that goes into the run's
+  ledger. Besides the status change, every session that worked on the run in the last two hours (subagents included)
+  gets a stop note: its next tool call is refused with "stop now" until you write in that chat again, the run is
+  resumed, or an hour has passed; read-only `orkestra status`/`watch`/`next` still work. Files stay as they are. The page
+  sends a per-process token and the server checks Host, Origin and that token, so another web page cannot press the
+  buttons; `orkestra dashboard --read-only` serves the page without them.
+- **The run console.** **New run** starts a headless run in a workspace project with the agent you pick (Claude Code,
+  Cursor, Copilot or Pi, each with the reason when it is not available), on autopilot or with your own plan approval.
+  The run's card then shows the agent's last message (its question, its plan summary) with a box to answer it, **Approve
+  the plan** in the approval phase and **Continue the run** when it is paused. Every run card opens its documents
+  (request, spec, plan, verification, report) in a reader. **Tools** shows the run service, background jobs, closes idle
+  runs after a preview (what `orkestra clear` does) and runs `orkestra doctor`. Agent work goes through the bridge below:
+  the dashboard server talks to it with the bridge token from `~/.orkestra/bridge.secret.json`, which never reaches the
+  browser, and offers to start the bridge when it is not running. A run driven by a Claude Code or Cursor chat is still
+  answered in that chat; the page says so.
 
 ## Reliability and speed
 
@@ -445,13 +467,14 @@ In Telegram: `/run <project> <request>` starts a run, plain text answers its que
 chat captured at setup may write. With the bridge running, `http://127.0.0.1:47615/` serves a local chat workbench:
 pick a project and an engine (Claude Code, Cursor or Copilot), start a request, answer questions, stop a run and watch a
 live flow map of phases, subagents, tasks, gates and hook activity. It asks for the bridge token and keeps it in page
-memory only.
+memory only. The dashboard (`orkestra dashboard`) offers the same on its own page without asking for the token.
 
 - **n8n**: `bridge/n8n/` holds two workflows; `python3 bridge/n8n_import.py` imports them using `N8N_URL` and
   `N8N_API_KEY` (or `N8N_STATE`). `POST /webhook/orkestra-job` starts a job and needs the `X-Orkestra-Key` header.
 - **OpenClaw**: do not give OpenClaw's Telegram bot token to the bridge (a token has one consumer). Call
   `bridge/orkestra_client.py` or the HTTP API (`POST /jobs`, `GET /runs`) instead; see
-  [integrations/openclaw/CONTRACT.md](integrations/openclaw/CONTRACT.md).
+  [integrations/openclaw/CONTRACT.md](integrations/openclaw/CONTRACT.md). The bundled OpenClaw plugin also turns a
+  request written in plain words in Telegram into a run (agent tool `orkestra_run`, same checks as `/run`).
 - The machine that runs the bridge must be awake and online for Telegram-started runs.
 
 ## Language

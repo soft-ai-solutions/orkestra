@@ -766,7 +766,7 @@ def record_status_row(project: Path, run_id: str, prev: str, status: str, who: D
     """The visible trace of a status change in the run's activity feed: who asked, from, to (best effort)."""
     from . import activity as A
     from .engines import short_sid
-    by = short_sid(str(who.get("session_id") or "")) or "cli"
+    by = str(who.get("by") or "") or short_sid(str(who.get("session_id") or "")) or "cli"
     A.record(project, run_id, dict(who, tool_name=""), "status", i18n.t("runs.status_row", by=by, src=prev, dst=status))
 
 

@@ -248,6 +248,10 @@ def grants_dir() -> Path:
     return orkestra_home() / "grants"
 
 
+def stops_dir() -> Path:
+    return orkestra_home() / "stops"
+
+
 def active_runs_path() -> Path:
     return orkestra_home() / "active-runs.json"
 

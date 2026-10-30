@@ -671,11 +671,12 @@ class TestTerminalView(MonitorBase):
         for code, busy_text, up_text in (
                 ("en", "could not open 127.0.0.1:48123 (Address already in use). It may already be running: "
                        "http://127.0.0.1:48123/ · or use another port: `orkestra dashboard --port <n>`",
-                 "orkestra dashboard → http://127.0.0.1:48123/  (this computer only, read-only · stop: Ctrl+C)"),
+                 "orkestra dashboard → http://127.0.0.1:48123/  (this computer only · Pause and Abort are on, `--read-only` "
+                 "turns them off · stop: Ctrl+C)"),
                 ("tr", "127.0.0.1:48123 açılamadı (Address already in use). Zaten açık olabilir: "
                        "http://127.0.0.1:48123/ \u2014 ya da başka port: `orkestra dashboard --port <n>`",
-                 "orkestra dashboard → http://127.0.0.1:48123/  (yalnızca bu bilgisayar, salt-okunur · kapatmak: "
-                 "Ctrl+C)")):
+                 "orkestra dashboard → http://127.0.0.1:48123/  (yalnızca bu bilgisayar · Duraklat ve İptal et açık, "
+                 "`--read-only` kapatır · kapatmak: Ctrl+C)")):
             err, out = io.StringIO(), io.StringIO()
             with lang(code), mock.patch("http.server.ThreadingHTTPServer", Busy), \
                     mock.patch.object(sys, "stderr", err), mock.patch.object(sys, "stdout", out), \
@@ -689,6 +690,11 @@ class TestTerminalView(MonitorBase):
                     mock.patch.dict(os.environ, {"CLAUDECODE": ""}):
                 self.assertEqual(MON.dashboard(None, port, False), 0)
             self.assertEqual(out.getvalue(), up_text + "\n", code)
+            ro = io.StringIO()
+            with lang(code), mock.patch("http.server.ThreadingHTTPServer", Quiet), \
+                    mock.patch.object(sys, "stdout", ro), mock.patch.dict(os.environ, {"CLAUDECODE": ""}):
+                self.assertEqual(MON.dashboard(None, port, False, read_only=True), 0)
+            self.assertIn("read-only" if code == "en" else "salt-okunur", ro.getvalue(), code)
             if code == "en":
                 self.assertFalse(TR_LETTERS.search(err.getvalue() + out.getvalue()))
 
@@ -773,7 +779,8 @@ class TestDashboardPage(MonitorBase):
         used = set(re.findall(r"\bL\.([A-Za-z0-9_]+)", script))
         have = set(self.labels_of(page))
         self.assertEqual(used - have, set(), "the script reads labels that the server does not send")
-        families = ("stall_mark_", "phase_", "ui_g_", "ui_k_", "ui_ts_", "ui_step_", "ui_tests_")   # L["<family>" + id]
+        families = ("stall_mark_", "phase_", "ui_g_", "ui_k_", "ui_ts_", "ui_step_", "ui_tests_", "lvl_", "ui_job_status_",
+                    "ui_doc_")   # L["<family>" + id]
         dynamic = {n for n in have if n.startswith(families)}
         for family in families:
             self.assertIn(f'L["{family}"', script)
@@ -997,7 +1004,7 @@ class TestDashboardScript(MonitorBase):
 # ================================================================== catalog hygiene for this area
 
 class TestCatalogs(unittest.TestCase):
-    SOURCES = [LIB / "monitor.py", LIB / "tempo.py", LIB / "i18n.py"]
+    SOURCES = [LIB / "monitor.py", LIB / "tempo.py", LIB / "i18n.py", LIB / "console.py"]
 
     def literals(self):
         used, prefixes = set(), set()
