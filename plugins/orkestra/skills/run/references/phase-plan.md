@@ -7,6 +7,7 @@ Goal: an approval-ready, implementation-proof plan. Output: `plan.md` + `reviews
    project: <abs path> · run folder: <path>
    inputs: request.md, context.md, scout-*.md, research*.md, spec.md, memory/PROJECT.md (+ relevant memory/specs/*.md, DECISIONS.md, LEARNINGS.md), AGENTS.md
    task: write plan.md for this spec (template: `orkestra template plan`); size <XS|S|M|L>; then run `orkestra plan check`.
+   Read only the files the spec names and the test beside each of them, then write plan.md in this same turn. A turn that only reads the repository is not finished.
    ```
    XS/S: write the plan yourself (1–3 tasks) instead of architect. After each dispatch end your turn; the report resumes you.
 2. Dispatch `orkestra:plan-critic` with the same paths. It writes `reviews/plan-critic.md` ending in `VERDICT: …`.

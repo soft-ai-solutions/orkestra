@@ -211,20 +211,13 @@ class TestNextWalksTheWholeRun(TempoBase):
         (self.fdir / "reviews" / "triage.md").write_text("| R-001 | reviewer | x | fix | open |\n")
         self.assertIn("open triage items: R-001", self.nxt())
         (self.fdir / "reviews" / "triage.md").write_text("| R-001 | reviewer | x | fix | done |\n")
-        self.assertIn("(review → deliver)", self.nxt())
-        self.phase_next()                                          # deliver
-        self.assertIn("write report.md", self.nxt())
-        (self.fdir / "report.md").write_text("# Teslim raporu\n" + ("detay " * 80))
-        self.assertIn("memory feature-add", self.nxt())
-        self.cli("memory", "feature-add", "-p", "demo", "--title", "Subtract", "--summary", "sub()", "--capabilities", "calc")
         n = self.nxt()
-        self.assertIn("before deliver → done", n)                  # never says "phase next" when the CLI would refuse
-        self.assertIn("evidence", n)
-        self.cli("report", "evidence", "--write", "-p", "demo")
-        self.assertIn("(deliver → done)", self.nxt())
-        self.phase_next()
+        self.assertIn("before review → deliver", n)
+        self.assertIn("T002", n)
+        self.assertIn("deferred", n)
+        self.assertNotIn("(review → deliver)", n)
         st = json.loads(self.cli("status", "--json", "-p", "demo", "--run", self.rid).stdout)
-        self.assertEqual(st["status"], "done")
+        self.assertNotEqual(st["status"], "done")
 
     def test_waiting_states_are_never_continued_automatically(self):
         self.start()
@@ -639,6 +632,23 @@ class TestAutoSizeOnStart(TempoBase):
         self.assertIn("inferred", out)
         st = json.loads(self.cli("status", "--json", "-p", "demo").stdout)
         self.assertEqual(st["size"], "XS")
+
+
+class TestALongPlanWritesTheFile(unittest.TestCase):
+    def test_ten_minutes_without_plan_md_says_write_it_now(self):
+        import tempfile
+        from datetime import datetime, timedelta, timezone
+        root = Path(tempfile.mkdtemp(prefix="plan-late-"))
+        rid = "001-x"
+        (root / ".orkestra" / "features" / rid).mkdir(parents=True)
+        (root / ".orkestra" / "features" / rid / "spec.md").write_text("spec\n", encoding="utf-8")
+        opened = (datetime.now(timezone.utc) - timedelta(minutes=12)).isoformat()
+        state = {"run_id": rid, "phase": "plan", "status": "active", "size": "M",
+                 "approval_mode": "autopilot", "history": [{"to": "plan", "at": opened}]}
+        note = T.plan_late_note(root, state, rid)
+        self.assertIn("plan.md is not written yet", note)
+        (root / ".orkestra" / "features" / rid / "plan.md").write_text("x" * 400, encoding="utf-8")
+        self.assertEqual(T.plan_late_note(root, state, rid), "")
 
 
 if __name__ == "__main__":

@@ -478,7 +478,7 @@ class TestText(PageCase):
         steps = [ev("const m=H.byId('main');H.find(m,n=>n.dataset&&n.dataset.act==='tasks')[0].fire('click');"
                     "const dirs=cls=>H.find(m,n=>n.className===cls).map(n=>n.dir);"
                     "return {h3:H.find(m,n=>n.tag==='h3').map(n=>n.dir),title:dirs('title'),now:dirs('now'),sum:dirs('sum'),"
-                    "code:H.find(m,n=>n.tag==='code').map(n=>n.dir||''),td:H.find(m,n=>n.tag==='td'&&!n.className).map(n=>n.dir||'')}", "r")]
+                    "code:H.find(m,n=>n.tag==='code').map(n=>n.dir||''),td:H.find(m,n=>n.tag==='td'&&n.className==='task').map(n=>n.dir||'')}", "r")]
         res = self.run_page([v], steps)["results"]["r"]
         self.assertEqual((res["h3"], res["title"], res["now"], res["sum"]), (["auto"], ["auto"], ["auto"], ["auto"]))
         self.assertTrue(res["code"] and all(d == "" for d in res["code"]), res["code"])      # a command stays left to right

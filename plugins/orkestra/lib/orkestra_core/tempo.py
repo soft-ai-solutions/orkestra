@@ -712,10 +712,10 @@ def next_action(project: Path, st: Dict[str, Any], deep: bool = True, now: Optio
         elif rid not in read_text(paths.memory_dir(project) / "FEATURES.md"):
             act = _n("cli", f"`orkestra memory feature-add {p} --title \"…\" --summary \"…\" --capabilities \"…\"`",
                      "memory/FEATURES.md has no entry for this run")
-    if phase == "plan" and act and _plan_is_a_long_refusal(project, st, rid):
-        act["text"] = ("This plan phase is past 10 minutes and no product file has changed. If the outcome is a "
-                       "written refusal, finish it now: one task, Files: none, TDD: n/a, then `orkestra phase next`. "
-                       "Do not keep researching. ") + str(act.get("text") or "")
+    if phase == "plan" and act:
+        note = _plan_late_note(project, st, rid)
+        if note:
+            act["text"] = note + str(act.get("text") or "")
     if act is None:
         if phase == "done":
             return done(_n("none", "run complete"))
@@ -737,17 +737,27 @@ def next_action(project: Path, st: Dict[str, Any], deep: bool = True, now: Optio
     return done(act)
 
 
-def _plan_is_a_long_refusal(project: Path, st: Dict[str, Any], rid: str) -> bool:
-    """True when plan has already used 10 minutes and this run still has no product diff.
-
-    A real feature that is still being designed is unchanged by the hint. A written refusal should already be done.
-    """
-    hist = st.get("history") or []
-    opened = _ts(hist[-1].get("at")) if hist else None
+def _plan_late_note(project: Path, st: Dict[str, Any], rid: str) -> str:
+    """Past 10 minutes with no plan.md: write it. A critic FAIL that already has a plan is left alone."""
+    opened = None
+    for row in reversed(st.get("history") or []):
+        if row.get("to") == "plan":
+            opened = _ts(row.get("at"))
+            break
     if opened is None or time.time() - opened < 600:
-        return False
-    from . import snapshot as S
-    return not S.changed_files(project, paths.run_dir(project, rid))
+        return ""
+    if len(read_text(paths.feature_dir(project, rid) / "plan.md").strip()) >= 200:
+        return ""
+    return ("This plan phase is past 10 minutes and plan.md is not written yet. Write it now from spec.md and the "
+            "files the spec names. A written refusal is one task, Files: none, TDD: n/a, then `orkestra phase next`. "
+            "Do not keep reading the repository. ")
+
+
+def plan_late_note(project: Path, st: Dict[str, Any], rid: str) -> str:
+    try:
+        return _plan_late_note(project, st, rid)
+    except Exception:
+        return ""
 
 
 def next_lines(n: Dict[str, Any], flags: Optional[List[str]] = None) -> List[str]:

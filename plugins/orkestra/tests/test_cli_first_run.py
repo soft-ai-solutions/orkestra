@@ -17,7 +17,8 @@ def run_cli(*args, lang="en", cwd=None, env_extra=None):
     tmp = Path(tempfile.mkdtemp(prefix="orkestra-fr-"))
     env = dict(os.environ, ORKESTRA_LANG=lang, ORKESTRA_HOME=str(tmp / "home"), COPILOT_HOME=str(tmp / "cop"),
                CLAUDE_CONFIG_DIR=str(tmp / "claude"), ORKESTRA_NO_DAEMON="1", PYTHONDONTWRITEBYTECODE="1")
-    for k in ("ORKESTRA_PROJECT", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CURSOR_AGENT", "CURSOR_TRACE_ID"):
+    for k in ("ORKESTRA_PROJECT", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CURSOR_AGENT",
+              "CURSOR_CONVERSATION_ID", "CURSOR_INVOKED_AS", "CURSOR_TRACE_ID"):
         env.pop(k, None)
     env.update(env_extra or {})
     return subprocess.run([sys.executable, str(helpers.BIN), *args], cwd=cwd or str(tmp), env=env,

@@ -971,8 +971,12 @@ def on_post_tool(ev: dict) -> None:
         if cur:   # marks the end of a Bash call (liveness: "a command is still running" vs "idle")
             activity.record(Path(cur["project"]), cur["run_id"], ev, "end", "✓")
         warnings = apply_markers(ev, sid, text) if "[orkestra:" in text else []
-        if warnings:                                # ONE JSON object per hook call (two would be unparseable)
-            context_out("PostToolUse", "\n".join(dict.fromkeys(warnings)))
+        note = ""
+        if cur:
+            note = tempo.plan_late_note(Path(cur["project"]), cur["state"], cur["run_id"])
+        lines = [x for x in ("\n".join(dict.fromkeys(warnings)), note) if x]
+        if lines:                                # ONE JSON object per hook call (two would be unparseable)
+            context_out("PostToolUse", "\n".join(lines))
         return
     b = binding_for(ev)
     if not b:
@@ -1004,6 +1008,10 @@ def on_post_tool(ev: dict) -> None:
                                                "spec/plan, re-check, and ask for approval again.")
         if not recorded and b["state"].get("status") == "awaiting_user":
             runs.set_status(project, b["run_id"], "active", "user answered")
+    if tool in ("Read", "Grep"):
+        note = tempo.plan_late_note(project, b["state"], b["run_id"])
+        if note:
+            context_out("PostToolUse", note)
 
 
 def agent_result_line(ev: dict) -> str:

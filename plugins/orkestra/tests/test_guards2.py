@@ -139,8 +139,34 @@ class TestParserFixes(unittest.TestCase):
         b = binding()
         ok = 'STATE=/tmp/sakabaz-wrangler-sc006; rm -rf "$STATE"'
         self.assertFalse(decide(bash(ok), b).denied)
+        self.assertFalse(decide(bash('STATE=/tmp/sakabaz-wrangler-sc006 rm -rf "$STATE"'), b).denied)
+        self.assertTrue(decide(bash('STATE=/tmp/x echo hi; rm -rf "$STATE"'), b).denied)
         self.assertTrue(decide(bash('rm -rf "$STATE"'), b).denied)
         self.assertTrue(decide(bash("rm -rf src"), b).denied)
+
+    def test_a_comment_that_says_truncated_can_still_read_the_log(self):
+        b = binding()
+        read = ("python3 -c \"p=open('.orkestra/runs/001-x/activity.jsonl'); "
+                "print('truncated', p.read())\"")
+        self.assertFalse(decide(bash(read, agent="orkestra:reviewer"), b).denied)
+        self.assertTrue(decide(bash("python3 -c \"import orkestra_core\""), b).denied)
+
+    def test_mktemp_in_tmp_and_a_project_for_loop_can_run(self):
+        b = binding()
+        copy = 'BACKUP=$(mktemp -d /tmp/hifz-x.XXXXXX) && cp a.txt "$BACKUP/"'
+        self.assertFalse(decide(bash(copy), b).denied, copy)
+        outside = 'BACKUP=$(mktemp -d /Users/shared/x.XXXXXX) && cp a.txt "$BACKUP/"'
+        self.assertTrue(decide(bash(outside), b).denied, outside)
+        loop = 'for f in test/ui/goldens/home_a.png test/ui/goldens/result_b.png; do cp "$b" "$f"; done'
+        self.assertFalse(decide(bash(loop), b).denied, loop)
+        self.assertTrue(decide(bash('for f in /etc/passwd; do cp x "$f"; done'), b).denied)
+        self.assertTrue(decide(bash('for f in ../outside; do cp x "$f"; done'), b).denied)
+
+    def test_reading_the_project_config_is_not_the_home_directory(self):
+        read = "python3 -c \"import json; print(open('.orkestra/config.json').read()[:800])\""
+        self.assertFalse(decide(bash(read)).denied)
+        write = "python3 -c \"open('/x/.orkestra/config.json','w').write('{}')\""
+        self.assertTrue(decide(bash(write)).denied)
 
     def test_readonly_denial_tells_where_to_experiment(self):
         d = decide(bash("cp src/a.ts src/a.ts.bak", agent="orkestra:reviewer"), binding())

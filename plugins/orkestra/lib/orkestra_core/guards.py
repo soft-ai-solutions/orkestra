@@ -394,10 +394,80 @@ def literal_assignments(command: str) -> Dict[str, Tuple[int, str]]:
             continue
         if m.group(0).lstrip()[:1] == "(" or re.match(r"[ \t]+[^\s;&|()<>#]", command[m.end():]):
             continue                                    # a subshell, or `NAME=v command` (the value lives for one command)
+        nxt = command[m.end():m.end() + 1]
+        if nxt and nxt in "$`(":
+            continue                                    # `NAME=$(...)` is not the empty string
         if val[:1] in "\"'" and val[-1:] == val[:1] and len(val) >= 2:
             val = val[1:-1]
         found[name] = (m.start(1), val)
     return found
+
+
+def _python_touches_orkestra_home(raw: str, home: Path) -> bool:
+    """A script that writes `~/.orkestra`, or that reads grants and session files there.
+
+    Reading the project's own `.orkestra/config.json` is ordinary. `open(..., 'w')` of any
+    `.orkestra/config.json` still counts, including a path that is not the live home."""
+    if not re.search(r"\.orkestra/(config\.json|grants|sessions|active-runs)", raw or ""):
+        return False
+    home_s = str(home)
+    private = ("~/.orkestra" in raw or (home_s and home_s in raw)
+               or re.search(r"\.orkestra/(grants|sessions|active-runs)", raw))
+    writing = bool(re.search(r"['\"][wax][a-z+]*['\"]|\.write\s*\(|\bos\.remove\b|\bunlink\b|>>|(?:^|[^<])>", raw))
+    return bool(private or writing)
+
+
+def _mktemp_dir(name: str, command: str) -> Optional[str]:
+    """`NAME=$(mktemp -d /tmp/...)` is that temp directory. A template outside /tmp is not."""
+    match = re.search(
+        r"(?:^|[;&|\n])\s*" + re.escape(name) +
+        r"=\$\(\s*mktemp\s+-d(?:\s+((?:/(?:private/)?(?:var/)?tmp)/\S+))?\s*\)",
+        command or "")
+    if not match:
+        return None
+    path = match.group(1) or "/tmp"
+    if ".." in path.split("/"):
+        return None
+    return path.rstrip("/")
+
+
+def _for_loop_stays_in_project(target: str, command: str) -> bool:
+    """`for f in rel/a rel/b; do cp src "$f"; done`: every word is a relative path, so `$f` stays in the project."""
+    match = re.fullmatch(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/?", target or "")
+    if not match:
+        return False
+    loop = re.search(r"\bfor\s+" + re.escape(match.group(1)) + r"\s+in\s+([^;\n]+)", command or "")
+    if not loop:
+        return False
+    words = loop.group(1).split()
+    if not words:
+        return False
+    for word in words:
+        if word.startswith(("/", "~", "$", "`", "-")) or ".." in word.split("/"):
+            return False
+    return True
+
+
+def _prefix_temp_target(target: str, command: str) -> Optional[str]:
+    """`STATE=/tmp/dir rm -rf "$STATE"`: the value applies only to that one command, not to a later `$STATE`."""
+    match = re.fullmatch(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?", target or "")
+    if not match:
+        return None
+    name = match.group(1)
+    assigned = re.search(
+        r"(?:^|[;&|\n])\s*" + re.escape(name) +
+        r"=((?:/(?:private/)?(?:var/)?tmp)[^\s\"'$`;&|()<>\\]*)[ \t]+",
+        command or "")
+    if not assigned:
+        return None
+    start = assigned.end()
+    end_at = re.search(r"[;&|\n]", command[start:])
+    end = start + end_at.start() if end_at else len(command)
+    uses = [command.find(mark + name, start) for mark in ("$", "${")]
+    uses = [pos for pos in uses if pos >= 0]
+    if not uses or min(uses) >= end:
+        return None
+    return assigned.group(1)
 
 
 def expand_literal_vars(target: str, command: str) -> Optional[str]:
@@ -413,7 +483,14 @@ def expand_literal_vars(target: str, command: str) -> Optional[str]:
         name = m.group(1) or m.group(2)
         hit = assigns.get(name)
         use = (command or "").find(m.group(0))
-        if hit is None or (use >= 0 and hit[0] >= use):
+        if hit is None:
+            temp = _mktemp_dir(name, command or "")
+            where = (command or "").find(name + "=$(")
+            if temp is None or where < 0 or (use >= 0 and where >= use):
+                bad = True
+                return m.group(0)
+            return temp
+        if use >= 0 and hit[0] >= use:
             bad = True
             return m.group(0)
         return hit[1]
@@ -490,8 +567,7 @@ def home_guard(event: Dict[str, Any], segs: List[sp.Segment]) -> Decision:
                 if is_relative_to(Path(t.rstrip("/*")), home):
                     return deny("home", msg)
             if seg.program in ("python", "python3", "node", "ruby", "perl", "bash", "sh", "zsh") and \
-                    re.search(r"\.orkestra/(config\.json|grants|sessions|active-runs)", seg.raw) and \
-                    re.search(r"open\(|write|unlink|rename|replace|remove|rm\b|>", seg.raw):
+                    _python_touches_orkestra_home(seg.raw, home):
                 return deny("home", msg)
     return ALLOW
 
@@ -1262,11 +1338,13 @@ def _classify(path: str, project: Path, feature_dir: Path) -> str:
 # and keeps the strict 1.3.0 test — a forged approval.json must not depend on how cleverly `open(…, 'w')` is written.
 RUN_MENTION_RE = re.compile(r"\.orkestra/runs[^\s'\"`)(,;]*", re.I)
 RUN_READABLE_RE = re.compile(r"/evidence(?:/|$)|/activity[\w.]*\.jsonl$|/watchdog-resume-\d+\.log$", re.I)
+# state, approval and the agent list are written only by the CLI. A script may read gates, snapshots and logs.
+RUN_PRIVATE_RE = re.compile(r"/(?:state|approval|agents)\.json$|/ledger(?:\.|$)|\.lock$", re.I)
 SCRIPT_STRICT_RE = re.compile(r"open\(|write|unlink|rename|replace|remove|truncate|shutil|copy|>")
 SCRIPT_WRITE_RE = re.compile(
     r",\s*['\"](?:[wax]b?\+?|r\+b?|rb\+)['\"]|\bmode\s*=\s*['\"](?:[wax]|r\+)|\.open\(\s*['\"][wax]|os\.open\(|O_WRONLY|O_RDWR|"
     r"O_TRUNC|O_APPEND|O_CREAT|\.write(?:_text|_bytes)?\(|writeFile|appendFile|createWriteStream|copyFile|cpSync|"
-    r"binwrite|unlink|\brename|os\.replace|os\.remove|shutil\.|rmtree|rmSync|truncate|json\.dump\(|"
+    r"binwrite|\bunlink\b|\brename\b|os\.replace|os\.remove|shutil\.|rmtree|rmSync|\btruncate\b|json\.dump\(|"
     r"print\([^\n]*\bfile\s*=|['\"]\s*>{1,2}\s*['\"]|>\s*\S*\.orkestra/runs")
 
 
@@ -1495,16 +1573,16 @@ def _calls_hook_entry(seg: sp.Segment, cwd: str, raw_program: str = "") -> bool:
 
 
 def _script_writes_run_state(raw: str) -> bool:
-    """True when a script would change `.orkestra/runs`, not when it only opens those files to print them.
+    """True when a script would change `.orkestra/runs`, or when it opens CLI-owned state.
 
-    Evidence logs stay on the narrow write test. Any other path under `.orkestra/runs` (gates, state, a
-    snapshot) is the same: `open(path)` and `json.load` are inspection. A write mode, `.write()`, `json.dump`,
-    unlink, or a path that climbs out with `..` still counts."""
+    Evidence logs, gate files and snapshots may be opened and printed. `state.json`, `approval.json` and
+    `agents.json` stay on the strict test, so `open()` and `Path.replace()` of those files are refused.
+    A write mode, `.write()`, `json.dump`, unlink, or a path that climbs out with `..` still counts."""
     mentions = RUN_MENTION_RE.findall(raw)
     cleaned = re.sub(r"&?>&?\s*(?:/dev/null\b|\d\b)", " ", raw)
-    if mentions and all(RUN_READABLE_RE.search(m) for m in mentions):
-        return bool(SCRIPT_WRITE_RE.search(raw))
-    if mentions and all(".orkestra/runs" in m.lower() and ".." not in m for m in mentions):
+    if not mentions or any(".." in m or RUN_PRIVATE_RE.search(m) for m in mentions):
+        return bool(SCRIPT_STRICT_RE.search(cleaned))
+    if all(".orkestra/runs" in m.lower() for m in mentions):
         return bool(SCRIPT_WRITE_RE.search(cleaned))
     return bool(SCRIPT_STRICT_RE.search(cleaned))
 
@@ -1597,7 +1675,8 @@ def run_guard(event: Dict[str, Any], cfg: Dict[str, Any], binding: Dict[str, Any
             for target in recursive_targets:
                 # A variable assigned to one literal temp directory in this same command is that directory.
                 # Anything else keeps the unexpanded target, so an unknown variable stays a deny.
-                expanded = expand_literal_vars(target, full_cmd)
+                prefixed = _prefix_temp_target(target, full_cmd)
+                expanded = prefixed if prefixed is not None else expand_literal_vars(target, full_cmd)
                 if expanded is not None and _classify(str(resolve_path(expanded, scwd)), project, fdir) == "temp":
                     continue
                 resolved = str(resolve_path(target, scwd))
@@ -1625,6 +1704,11 @@ def run_guard(event: Dict[str, Any], cfg: Dict[str, Any], binding: Dict[str, Any
             continue
         for raw_t in raw_write_targets(seg):
             if not (_VAR_PATH_RE.search(raw_t) and guards.get("isolation", True)) or is_temp_var_path(raw_t, full_cmd):
+                continue
+            if _for_loop_stays_in_project(raw_t, full_cmd):
+                continue
+            prefixed = _prefix_temp_target(raw_t, full_cmd)
+            if prefixed is not None and _classify(str(resolve_path(prefixed, scwd)), project, fdir) == "temp":
                 continue
             expanded = expand_literal_vars(raw_t, full_cmd)
             if expanded is None:

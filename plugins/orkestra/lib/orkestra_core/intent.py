@@ -149,7 +149,10 @@ _DEPLOY_POS = _LazyRe(
     r"|\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?deploy\b"
     r"|\bwrangler\s+deploy\b"
     r"|\bcanlıya\s+(?:al|çıkar|cikar|gönder|gonder|yayınla|yayinla)\b"
-    r"|\bdeploy\s*:.{0,180}\b(?:istedi|istiyor|istiyorum|istedim|wants|asked|requested)\b",
+    r"|\bdeploy\s*:.{0,180}\b(?:istedi|istiyor|istiyorum|istedim|wants|asked|requested)\b"
+    # "deploy komutunu çalıştır / çalistir" is an ask. "çalıştırma" is a refusal and stays out.
+    r"|\bdeploy\b.{0,48}?\b(?:(?:c|ç)al[ıi](?:s|ş)t[ıi]r(?!ma)|execute)\w*"
+    r"|\b(?:run|execute)\s+(?:the\s+)?(?:documented\s+)?deploy\b",
     re.I)
 
 

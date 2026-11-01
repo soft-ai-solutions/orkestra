@@ -125,13 +125,21 @@ class TestIntent(unittest.TestCase):
             "deploy et",
             "npm run deploy",
             "Deploy: kullanici kapilar yesil olunca uretim komutunu istedi.",
+            "Kapilar yesilse belgelenmis deploy komutunu çalistir.",
+            "Kapılar yeşilse belgelenmiş deploy komutunu çalıştır.",
+            "run the documented deploy command",
+            "npx wrangler deploy",
         ]
         no = [
             "deploy guard reddederse ship.md yaz",
             "deploy etme",
             "don't deploy",
+            "do not run the documented deploy",
+            "deploy komutunu çalıştırma",
             "add a deploy button to the settings page",
             "what is a deploy?",
+            "the last deploy run failed",
+            "ship.md yalniz guard deploy'u reddettiyse",
         ]
         for text in yes:
             with self.subTest(text=text):
@@ -141,6 +149,31 @@ class TestIntent(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertFalse(deploy_requested(text))
                 self.assertNotIn("deploy", prompt_grants(text))
+
+    def test_a_request_to_run_the_deploy_command_lets_wrangler_deploy(self):
+        import tempfile
+        from pathlib import Path
+        from orkestra_core import guards, hookmain
+        from orkestra_core.paths import DEFAULT_GLOBAL_CONFIG
+        sentence = ("Kapilar yesilse belgelenmis deploy komutunu çalistir. "
+                    "wrangler delete ve D1 silme yok.")
+        root = Path(tempfile.mkdtemp(prefix="deploy-ask-"))
+        rid = "004-x"
+        fdir = root / ".orkestra" / "features" / rid
+        fdir.mkdir(parents=True)
+        (fdir / "request.md").write_text(sentence, encoding="utf-8")
+        binding = {"project": str(root), "run_id": rid, "state": {"phase": "implement", "status": "active",
+                                                                  "approved": {"deps": []}, "run_id": rid}}
+        self.assertTrue(hookmain._request_asks_deploy(binding))
+        allow = guards.pre_tool_decision(
+            {"tool_name": "Bash", "tool_input": {"command": "npx wrangler deploy"}, "cwd": str(root)},
+            DEFAULT_GLOBAL_CONFIG, binding, ["deploy"])
+        self.assertFalse(allow.denied)
+        denied = guards.pre_tool_decision(
+            {"tool_name": "Bash", "tool_input": {"command": "npx wrangler delete"}, "cwd": str(root)},
+            DEFAULT_GLOBAL_CONFIG, binding, ["deploy"])
+        self.assertTrue(denied.denied)
+        self.assertEqual(denied.guard, "deploy")
 
     def test_git_grants(self):
         for text, expected in GRANT_CASES.items():
