@@ -475,6 +475,9 @@ Dashboard (`orkestra dashboard`) aynısını kendi sayfasında, token sormadan s
   `bridge/orkestra_client.py` ya da HTTP API'yi (`POST /jobs`, `GET /runs`) çağır; bkz.
   [integrations/openclaw/CONTRACT.tr.md](integrations/openclaw/CONTRACT.tr.md). Paketteki OpenClaw eklentisi
   Telegram'a doğal dille yazılan bir isteği de çalışmaya çevirir (ajan aracı `orkestra_run`, `/yap` ile aynı kontroller).
+  Sahibin parolasını içeren mesaj bir sahip işine dönüşür (en iyi model, sonuna kadar autopilot, yayın adımlarına izin,
+  geri alınamayan hiçbir şey yok; Orkestra kapalıysa önce açılır) ve `/ide` bridge'i, dashboard'u ve IDE'yi geri
+  getirir. Ayrıntı: sözleşmedeki "Sahip komutları".
 - Telegram'dan başlayan run'lar için bridge'i çalıştıran makine açık ve internete bağlı olmalıdır.
 
 ## Dil

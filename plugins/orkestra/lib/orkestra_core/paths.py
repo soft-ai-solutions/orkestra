@@ -39,7 +39,8 @@ DEFAULT_GLOBAL_CONFIG: Dict[str, Any] = {
     "watchdog": {"dead_wait_seconds": 90, "hung_command_seconds": 900, "gate_command_seconds": 1800,
                  "silent_seconds": 600, "user_wait_notify_seconds": 300, "loop_repeats": 3, "agent_max_minutes": 60,
                  "agent_silent_seconds": 150,   # a registered subagent with no sign of life this long is lost (hooks, next)
-                 "lease_seconds": 120, "auto_resume": "headless", "max_auto_resumes": 3, "renotify_minutes": 30,
+                 "lease_seconds": 120, "health_check_seconds": 120, "auto_resume": "headless",
+                 "max_auto_resumes": 3, "renotify_minutes": 30,
                  "macos_notify": True,
                  "autostart": True,           # SessionStart may start the fast watcher (fastwatch.ensure_running); POSIX only
                  "daemon_idle_minutes": 30},  # the detached fast watcher exits after this long with no open run and no live session

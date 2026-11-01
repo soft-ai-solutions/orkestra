@@ -178,7 +178,7 @@ def _unreadable_view(project: Path, st: Dict[str, Any], mtime: float, exc: BaseE
     return {
         "project": str(project), "project_name": project.name, "run_id": rid, "title": _text_of(st.get("title")),
         "size": _text_of(st.get("size"), 20), "mode": _text_of(st.get("mode"), 20),
-        "engine": _text_of(st.get("engine") or "claude", 20), "phase": phase,
+        "engine": _text_of(st.get("engine") or "claude", 20), "model": "", "phase": phase,
         "phase_label": _word("monitor.phase_", phase, phase), "phase_tr": _word("monitor.phase_", phase, phase, "tr"),
         "phase_index": PHASES.index(phase), "phase_since": None, "status": status,
         "status_label": _word("monitor.status_", status, ""), "status_tr": _word("monitor.status_", status, "", "tr"),
@@ -236,6 +236,80 @@ def _driving_engine(project: Path, run_id: str, stored: str) -> str:
     if not found:
         return stored
     return newest_engine or stored
+
+
+_MODEL_FLAG = re.compile(r"(?:^|\s)--model(?:=|\s+)(\S+)")
+_proc_commands: tuple = (0.0, [])
+
+
+def model_from_command(command: str) -> str:
+    """The ``--model`` value of one process command, or "" when that process does not name one.
+
+    The first flag wins. A later mention inside the prompt is not a second flag: the real flag is earlier in the
+    command line."""
+    match = _MODEL_FLAG.search(command or "")
+    if not match:
+        return ""
+    value = match.group(1).strip("'\"")
+    if not value or value.startswith("-") or len(value) > 80 or any(c.isspace() for c in value):
+        return ""
+    return value
+
+
+def _agent_commands() -> List[str]:
+    """Command lines of the machine's processes, cached for two seconds. Empty when they cannot be read."""
+    global _proc_commands
+    now = time.time()
+    stamp, rows = _proc_commands
+    if rows and now - stamp < 2.0:
+        return rows
+    try:
+        import subprocess
+        cp = subprocess.run(["ps", "-axo", "command="], capture_output=True, text=True, timeout=3)
+        found = [ln for ln in (cp.stdout or "").splitlines() if "--model" in ln] if cp.returncode == 0 else []
+    except (OSError, subprocess.SubprocessError):
+        found = []
+    _proc_commands = (now, found)
+    return found
+
+
+def _session_needles(job: Optional[Dict[str, Any]], sessions: List[Dict[str, Any]]) -> List[str]:
+    raw: List[str] = []
+    if isinstance(job, dict) and job.get("session_id"):
+        raw.append(str(job["session_id"]))
+    for s in sessions:
+        sid = str(s.get("id") or "")
+        for prefix in ("cursor-", "copilot-", "pi-", "claude-"):
+            if sid.startswith(prefix):
+                raw.append(sid[len(prefix):])
+                break
+        else:
+            if sid:
+                raw.append(sid)
+    out: List[str] = []
+    for n in raw:
+        if len(n) >= 8 and n not in out:
+            out.append(n)
+    return out
+
+
+def live_model(job: Optional[Dict[str, Any]], sessions: List[Dict[str, Any]],
+               commands: Optional[List[str]] = None) -> str:
+    """The model the run's own driver process is using right now, or "" when that cannot be read.
+
+    Matched by the run's session id, then that process's ``--model``. A configured default is not a substitute:
+    the card only names a model it can see on the live command line, or the model the job itself recorded."""
+    needles = _session_needles(job, sessions)
+    for cmd in commands if commands is not None else _agent_commands():
+        if needles and any(n in cmd for n in needles):
+            found = model_from_command(cmd)
+            if found:
+                return found
+    if isinstance(job, dict):
+        recorded = str(job.get("copilot_model") or job.get("model") or "").strip()
+        if recorded and len(recorded) <= 80 and not any(c.isspace() for c in recorded):
+            return recorded
+    return ""
 
 
 def _sessions_for(project: Path, run_id: str) -> List[Dict[str, Any]]:
@@ -763,9 +837,91 @@ def _status_at(st: Dict[str, Any], status: str, state_ts: Optional[float]) -> Op
     return at or state_ts
 
 
+def _feature_life(project: Path, run_id: str) -> float:
+    """Newest feature file of this run. A plan or a review can move while the tool log stays quiet."""
+    if not run_id:
+        return 0.0
+    fdir = paths.feature_dir(project, run_id)
+    if not fdir.is_dir():
+        return 0.0
+    best = 0.0
+    try:
+        found = list(fdir.rglob("*"))
+    except OSError:
+        return 0.0
+    for path in found:
+        if not path.is_file() or path.suffix != ".md" or path.name.endswith(".lock"):
+            continue
+        try:
+            best = max(best, path.stat().st_mtime)
+        except OSError:
+            continue
+    return best
+
+
+_proc_etime: tuple = (0.0, [])
+
+
+def _process_etimes() -> List[tuple]:
+    """`(elapsed seconds, command)` for live processes. Cached for two seconds. Empty if `ps` cannot be read."""
+    global _proc_etime
+    now = time.time()
+    stamp, rows = _proc_etime
+    if rows and now - stamp < 2.0:
+        return rows
+    found: List[tuple] = []
+    try:
+        import subprocess
+        cp = subprocess.run(["ps", "-axo", "etime=,command="], capture_output=True, text=True, timeout=3)
+        if cp.returncode == 0:
+            for line in (cp.stdout or "").splitlines():
+                bits = line.strip().split(None, 1)
+                if len(bits) != 2:
+                    continue
+                elapsed = _etime_seconds(bits[0])
+                if elapsed is None:
+                    continue
+                found.append((elapsed, bits[1]))
+    except (OSError, subprocess.SubprocessError):
+        found = []
+    _proc_etime = (now, found)
+    return found
+
+
+def driver_born_at(job: Optional[Dict[str, Any]], sessions: List[Dict[str, Any]], now: float,
+                   rows: Optional[List[tuple]] = None) -> float:
+    """Start time of the youngest live driver for this run, or 0 when none is visible.
+
+    The silence clock must not outlive the process that is actually running. An older feature file
+    stays on disk after a restart. The card uses this start instead of that file."""
+    needles = _session_needles(job, sessions)
+    if not needles:
+        return 0.0
+    youngest: Optional[int] = None
+    for elapsed, command in rows if rows is not None else _process_etimes():
+        if any(needle in command for needle in needles):
+            youngest = elapsed if youngest is None else min(youngest, int(elapsed))
+    if youngest is None:
+        return 0.0
+    return now - youngest
+
+
+def _shown_quiet(now: float, measured: Optional[float], feature_ts: float) -> Optional[float]:
+    """The shorter gap: the tool-log age, or the age of a newer feature file. Never a longer one."""
+    gaps: List[float] = []
+    if measured is not None and measured >= 0:
+        gaps.append(float(measured))
+    if feature_ts:
+        gaps.append(max(0.0, now - feature_ts))
+    if not gaps:
+        return measured
+    return min(gaps)
+
+
 def _attention(st: Dict[str, Any], live: Dict[str, Any], stall: Dict[str, Any], agents: List[str], project: Path,
                rows: Optional[List[Dict[str, Any]]] = None, now: Optional[float] = None,
-               last_ts: float = 0.0, run_seconds: float = 0.0, facts: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+               last_ts: float = 0.0, run_seconds: float = 0.0, facts: Optional[Dict[str, Any]] = None,
+               driver_born: float = 0.0) -> Dict[str, Any]:
     """The single answer to "what is this run doing and what must I do": group (you | stalled | running | paused | done),
     a language-free `code`, and the sentences for a person. First matching rule wins; the model-facing wording of the
     legacy `live` / `stall` texts is never used here. `facts` (see `_facts`) is the measured evidence; without it only the
@@ -787,6 +943,7 @@ def _attention(st: Dict[str, Any], live: Dict[str, Any], stall: Dict[str, Any], 
     idle = max(0.0, now - last_ts) if last_ts else None
     act_ts = float(facts.get("activity_ts") or 0.0)
     gap = max(0.0, now - act_ts) if act_ts else None    # time since the last activity row (None: no row at all)
+    feature_ts = _feature_life(project, str(st.get("run_id") or ""))
     command, where = "", "none"
     group, code = "running", "working"
     phase_word = _word("monitor.phase_", st.get("phase"), str(st.get("phase")))
@@ -796,7 +953,9 @@ def _attention(st: Dict[str, Any], live: Dict[str, Any], stall: Dict[str, Any], 
     cmd = facts["cmd"]
     wait_cmd = facts.get("wait_cmd")
     cmd_age = now - cmd[1] if cmd else None
-    hung_s = float(T.wd_cfg().get("hung_command_seconds") or 900)
+    wd = T.wd_cfg()
+    hung_s = float(wd.get("hung_command_seconds") or 900)
+    confirm_s = float(wd.get("health_check_seconds") or 120)
     long_wait = bool(wait_cmd) and now - wait_cmd[1] > 3 * hung_s     # a main-session `sleep` that long is no agent wait
     if agents and facts.get("agents_alive"):
         eff = "run"
@@ -892,31 +1051,78 @@ def _attention(st: Dict[str, Any], live: Dict[str, Any], stall: Dict[str, Any], 
                       ago=_hago(since))
         command, where = _resume_action(st, project)
     elif facts.get("left") and not cmd:
-        group, code, since = "stalled", "detached", max(0.0, now - facts["idle_ts"])
-        what = i18n.t("monitor.attn_detached_what", ago=_hago(since))
-        command, where = _resume_action(st, project)
-    elif cls == 4:
-        group, code = "stalled", "silent"
-        if not rows:
-            since = run_seconds if run_seconds >= 1 else since
-            what = i18n.t("monitor.attn_silent_what_never", dur=_hum(run_seconds))
+        age = max(0.0, now - facts["idle_ts"])
+        born = float(driver_born or 0.0)
+        # One idle row is not proof the session left. A live driver, or a gap shorter than one health
+        # check, stays a normal quiet card. The definite line waits until the next check still sees nobody.
+        if born or age < confirm_s:
+            shown = min(age, max(0.0, now - born)) if born else age
+            if shown < 90:
+                group, code, since = "running", "working", None
+                what = i18n.t("monitor.attn_working_what", ago=_hago(shown))
+            else:
+                group, code, since = "running", "quiet", shown
+                what = i18n.t("monitor.attn_quiet_what", dur=_hum(shown), phase=phase_word) + record_note
         else:
-            if gap is not None:
-                since = gap
-            what = i18n.t("monitor.attn_silent_what", dur=_hum(since)) + record_note
-        command, where = _resume_action(st, project)
+            group, code, since = "stalled", "detached", age
+            what = i18n.t("monitor.attn_detached_what", ago=_hago(since))
+            command, where = _resume_action(st, project)
+    elif cls == 4:
+        born = float(driver_born or 0.0)
+        shown = _shown_quiet(now, gap if gap is not None else since, feature_ts)
+        if born:
+            age = max(0.0, now - born)
+            shown = age if shown is None else min(float(shown), age)
+        # A live driver cannot be silent longer than it has been alive. Under 90s it is working.
+        # Under 5 min it is only quiet. The corner badge stays for a driver that itself has been idle 5 min.
+        if born and shown is not None and shown < 90:
+            group, code, since = "running", "working", None
+            what = i18n.t("monitor.attn_working_what", ago=_hago(shown))
+        elif born and shown is not None and shown < 300:
+            group, code, since = "running", "quiet", shown
+            what = i18n.t("monitor.attn_quiet_what", dur=_hum(shown), phase=phase_word) + record_note
+        else:
+            group, code = "stalled", "silent"
+            if not rows and not feature_ts and not born:
+                since = run_seconds if run_seconds >= 1 else since
+                what = i18n.t("monitor.attn_silent_what_never", dur=_hum(run_seconds))
+            else:
+                since = shown if born else _shown_quiet(now, gap if gap is not None else since, feature_ts)
+                what = i18n.t("monitor.attn_silent_what", dur=_hum(since)) + record_note
+            command, where = _resume_action(st, project)
     elif eff == "stale" and not (wait_cmd and not long_wait):
-        group, code, since = "stalled", "stale", gap if gap is not None else idle
-        what = i18n.t("monitor.attn_stale_what", dur=_hum(since)) + record_note
-        command, where = _resume_action(st, project)
+        born = float(driver_born or 0.0)
+        shown = _shown_quiet(now, gap if gap is not None else idle, feature_ts)
+        if born:
+            age = max(0.0, now - born)
+            shown = age if shown is None else min(float(shown), age)
+        if born and shown is not None and shown < 90:
+            group, code, since = "running", "working", None
+            what = i18n.t("monitor.attn_working_what", ago=_hago(shown))
+        elif born and shown is not None and shown < 900:
+            group, code, since = "running", "quiet", shown
+            what = i18n.t("monitor.attn_quiet_what", dur=_hum(shown), phase=phase_word) + record_note
+        else:
+            group, code, since = "stalled", "stale", shown if born else _shown_quiet(now, gap if gap is not None else idle, feature_ts)
+            what = i18n.t("monitor.attn_stale_what", dur=_hum(since)) + record_note
+            command, where = _resume_action(st, project)
     elif eff != "run" and (cmd or wait_cmd):
         # an open command call is not quiet: say what the record shows instead of "the agent may be thinking"
         group, code, since = "running", "working", None
         what = i18n.t("monitor.attn_working_cmd_what", ago=_hago(now - (cmd or wait_cmd)[1]))
     elif eff == "quiet":
-        # "wait" here is the legacy guess about the human (a talk phase with no activity): without evidence it is only a gap
-        group, code, since = "running", "quiet", gap if gap is not None else idle
-        what = i18n.t("monitor.attn_quiet_what", dur=_hum(since), phase=phase_word) + record_note
+        # A live driver cannot look quiet longer than it has been alive.
+        born = float(driver_born or 0.0)
+        shown = _shown_quiet(now, gap if gap is not None else idle, feature_ts)
+        if born:
+            age = max(0.0, now - born)
+            shown = age if shown is None else min(float(shown), age)
+        if born and shown is not None and shown < 90:
+            group, code, since = "running", "working", None
+            what = i18n.t("monitor.attn_working_what", ago=_hago(shown))
+        else:
+            group, code, since = "running", "quiet", shown
+            what = i18n.t("monitor.attn_quiet_what", dur=_hum(since), phase=phase_word) + record_note
     elif agents:
         group, code, since = "running", "agents", None
         what = i18n.t("monitor.attn_agents_what", who=", ".join(agents[:4]))
@@ -1093,7 +1299,7 @@ def collect(project: Path, st: Dict[str, Any], mtime: float = 0.0, n_activity: i
                       "agent": t.get("agent") or "", "evidence": ("R" if red else "-") + ("G" if green else "-"),
                       "tests": tests})
         by_status[t.get("status") if t.get("status") in by_status else "pending"] += 1
-    done = sum(1 for t in tlist if t["status"] in ("done", "deferred"))
+    done = sum(1 for t in tlist if t["status"] == "done")
     hist = st.get("history") or []
     phase_since = _parse_iso(hist[-1].get("at", "")) if hist else None
     ledger = [ln[2:] for ln in read_text(paths.feature_dir(project, rid) / "ledger.md").splitlines()
@@ -1126,12 +1332,15 @@ def collect(project: Path, st: Dict[str, Any], mtime: float = 0.0, n_activity: i
     activity_ts = max([float(r.get("ts") or 0) for r in rows] or [0.0])
     last_ts = max(activity_ts, float(state_updated or 0))
     phase_history, phases_skipped = _phase_history(st, now, None if is_open else state_updated)
-    attention = _attention(st, live, stall, agents, project, rows, now, last_ts, tm["run"], facts)
+    job = CO.job_for(project, rid)
+    attention = _attention(st, live, stall, agents, project, rows, now, last_ts, tm["run"], facts,
+                           driver_born_at(job, sessions, now))
     live = _honest_live(live, attention)
     gates_struct = _gate_struct(rdir)
     return {
         "project": str(project), "project_name": project.name, "run_id": rid, "title": st.get("title", ""),
-        "size": st.get("size", ""), "mode": st.get("mode", ""), "engine": st.get("engine") or "claude", "phase": phase,
+        "size": st.get("size", ""), "mode": st.get("mode", ""), "engine": st.get("engine") or "claude",
+        "model": live_model(job, sessions), "phase": phase,
         # `*_label`: display name in the current language. `*_tr`: the same in Turkish, always (what older consumers,
         # e.g. the OpenClaw plugin, read); the machine values are `phase` / `status`.
         "phase_label": _word("monitor.phase_", phase, phase), "phase_tr": _word("monitor.phase_", phase, phase, "tr"),
@@ -1164,7 +1373,7 @@ def collect(project: Path, st: Dict[str, Any], mtime: float = 0.0, n_activity: i
         "activity_feed": feed_page,
         "risks": risks, "risk_counts": risk_counts,
         # the run service's job that drives this run (headless), and the run documents a person can open
-        "job": CO.job_view(CO.job_for(project, rid)), "docs": CO.docs_of(project, rid),
+        "job": CO.job_view(job), "docs": CO.docs_of(project, rid),
     }
 
 
@@ -1286,7 +1495,10 @@ def render_text(views: List[Dict[str, Any]], color: bool = False, width: Optiona
     out: List[str] = []
     now = time.time()
     for v in views:
-        head = f"━━ {v['project_name']} · {v['run_id']} · \"{v['title']}\" ({v['size']}{', headless' if v['mode'] == 'headless' else ''}{', cursor' if v.get('engine') == 'cursor' else ''}) "
+        head = (f"━━ {v['project_name']} · {v['run_id']} · \"{v['title']}\" ({v['size']}"
+                f"{', headless' if v['mode'] == 'headless' else ''}"
+                f"{', cursor' if v.get('engine') == 'cursor' else ''}"
+                f"{', ' + v['model'] if v.get('model') else ''}) ")
         out.append(c("1", cut(head, width) + "━" * max(0, width - len(head))))
         bar = []
         for i, ph in enumerate(PHASES):
@@ -1419,7 +1631,7 @@ UI_KEYS = (
     "monitor.ui_copy", "monitor.ui_copied", "monitor.ui_copy_failed",
     "monitor.ui_age_waiting", "monitor.ui_age_stalled", "monitor.ui_phase_of",
     "monitor.ui_step_done", "monitor.ui_step_current", "monitor.ui_step_todo", "monitor.ui_step_skipped",
-    "monitor.ui_t_progress", "monitor.ui_t_blocked", "monitor.ui_t_todo", "monitor.ui_t_all", "monitor.ui_t_hide",
+    "monitor.ui_t_progress", "monitor.ui_t_blocked", "monitor.ui_t_todo", "monitor.ui_t_deferred", "monitor.ui_t_all", "monitor.ui_t_hide",
     "monitor.ui_t_col_id", "monitor.ui_t_col_task", "monitor.ui_t_col_status", "monitor.ui_t_col_tests",
     "monitor.ui_ts_done", "monitor.ui_ts_in_progress", "monitor.ui_ts_blocked", "monitor.ui_ts_pending",
     "monitor.ui_ts_deferred",
@@ -1441,13 +1653,15 @@ UI_KEYS = (
     "monitor.ui_age_hung", "monitor.ui_announce_hung", "monitor.ui_record_changed", "monitor.ui_fin_aborted",
     "monitor.ui_ctl_pause", "monitor.ui_ctl_abort", "monitor.ui_ctl_pause_aria", "monitor.ui_ctl_abort_aria",
     "monitor.ui_ctl_pause_h", "monitor.ui_ctl_abort_h", "monitor.ui_ctl_pause_p", "monitor.ui_ctl_abort_p",
+    "monitor.ui_ctl_project", "monitor.ui_ctl_job", "monitor.ui_ctl_id",
+    "monitor.ui_ctl_sure_pause", "monitor.ui_ctl_sure_abort", "monitor.ui_ctl_err_sure",
     "monitor.ui_ctl_reason", "monitor.ui_ctl_reason_ph", "monitor.ui_ctl_cancel", "monitor.ui_ctl_ok_pause",
     "monitor.ui_ctl_ok_abort", "monitor.ui_ctl_busy_pause", "monitor.ui_ctl_busy_abort", "monitor.ui_ctl_done_pause",
     "monitor.ui_ctl_done_abort", "monitor.ui_ctl_err_token", "monitor.ui_ctl_err_closed", "monitor.ui_ctl_err_not_found",
     "monitor.ui_ctl_err_reason_long", "monitor.ui_ctl_err_read_only", "monitor.ui_ctl_err_origin", "monitor.ui_ctl_err_net",
     "monitor.ui_ctl_err_failed", "monitor.ui_ctl_foot",
     "monitor.ui_risk_h", "monitor.ui_risk_sum", "monitor.ui_risk_p", "monitor.ui_risk_all", "monitor.ui_risk_less",
-    "monitor.ui_risk_go", "monitor.ui_risk_go_aria", "monitor.ui_risk_by", "monitor.ui_risk_guard", "monitor.ui_risk_n",
+    "monitor.ui_risk_go", "monitor.ui_risk_go_aria", "monitor.ui_risk_by", "monitor.ui_risk_guard", "monitor.ui_risk_n", "monitor.ui_gap_n",
     "risk.lvl_high", "risk.lvl_medium", "risk.lvl_blocked",
     "monitor.ui_new",
     "monitor.ui_tools",
@@ -1671,10 +1885,12 @@ ol.steps li.sk{border-style:dashed}
 .tl{font-size:12px;color:var(--ink2);margin:0 0 4px}.tl b{color:var(--ink)}
 .tog{font:inherit;font-size:12px;color:var(--focus);background:none;border:0;padding:0;text-decoration:underline;min-height:24px;line-height:1.2}
 .ttable{overflow:auto;margin:4px 0;max-height:min(40vh,280px);border:1px solid var(--line);border-radius:8px}
-table.tt{border-collapse:collapse;width:100%;font-size:12px}
+table.tt{border-collapse:collapse;width:max-content;min-width:100%;font-size:12px}
 .tt thead th{position:sticky;top:0;background:var(--surface);z-index:1}
-.tt th{text-align:left;color:var(--ink2);font-weight:600;border-bottom:1px solid var(--line);padding:3px 6px}
-.tt td{padding:3px 6px;border-top:1px solid var(--line);vertical-align:top}.tt td.id{font-family:var(--mono);white-space:nowrap}.tt td:nth-child(3),.tt td:nth-child(4){white-space:nowrap}
+.tt th,.tt td{overflow-wrap:normal;word-break:normal}
+.tt th{text-align:left;color:var(--ink2);font-weight:600;border-bottom:1px solid var(--line);padding:3px 6px;white-space:nowrap}
+.tt td{padding:3px 6px;border-top:1px solid var(--line);vertical-align:top}.tt td.id{font-family:var(--mono);white-space:nowrap}.tt td.st,.tt td.tests{white-space:nowrap}
+.tt td.task{min-width:12em;max-width:28em;white-space:normal;overflow-wrap:break-word}
 .tt td.st .g,.tt td.tests .g{display:inline-block;min-width:1em;margin-right:.3em;font-weight:700}
 .tt td.st-done .g,.tt td.tests-passed .g{color:var(--run-fg)}
 .tt td.st-in_progress .g,.tt td.tests-awaiting_green .g{color:var(--run-edge)}
@@ -1683,7 +1899,7 @@ table.tt{border-collapse:collapse;width:100%;font-size:12px}
 .tt td.st-deferred .g{color:var(--ink2)}
 .tt td.tests-passed{color:var(--run-fg);font-weight:600}
 .tt td.tests-na{color:var(--ink2)}
-.tt.no-tests td:nth-child(3){white-space:nowrap}
+.tt.no-tests td.st{white-space:nowrap}
 .chips{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}.chips:empty{display:none}
 .gchip{font-size:12px;border:1px solid var(--line);border-radius:6px;padding:1px 8px;color:var(--ink)}
 .gchip.bad{border-color:var(--stall-edge);color:var(--stall-fg);font-weight:700}
@@ -1790,8 +2006,13 @@ width:min(540px,calc(100vw - 32px));max-height:calc(100vh - 32px);box-shadow:0 2
 dialog.dlg::backdrop{background:rgba(10,14,23,.55)}
 .dlg-in{margin:0;padding:18px 20px 16px;display:flex;flex-direction:column;gap:8px}
 .dlg h2{font-size:18px;margin:0}
-.dlg-run{font-weight:600;margin:0}
-.dlg-p{color:var(--ink2);font-size:13px;margin:0}
+.dlg-who{margin:8px 0 0;display:grid;gap:4px}
+.dlg-who div{display:grid;grid-template-columns:5.5em minmax(0,1fr);gap:8px;align-items:baseline}
+.dlg-who dt{margin:0;color:var(--ink2);font-size:12px}
+.dlg-who dd{margin:0;font-weight:650}
+.sure{display:flex;gap:8px;align-items:flex-start;margin:10px 0 0;font-size:14px}
+.sure input{width:18px;height:18px;margin-top:2px;flex:none}
+.dlg-p{color:var(--ink2);font-size:13px;margin:8px 0 0}
 .dlg-lbl{font-size:12px;font-weight:600;color:var(--ink2);margin-top:6px}
 #ctl-reason{font:inherit;font-size:13px;border:1px solid var(--ctl);border-radius:10px;padding:8px 10px;background:var(--bg);color:var(--ink);resize:vertical;min-height:64px;width:100%}
 #ctl-reason::placeholder{color:var(--ink2);opacity:1}
@@ -1802,6 +2023,7 @@ dialog.dlg::backdrop{background:rgba(10,14,23,.55)}
 background:var(--ink);color:var(--bg);border-radius:12px;padding:10px 16px;font-weight:600;box-shadow:var(--shadow-h);max-width:calc(100vw - 32px)}
 .toast[hidden]{display:none}
 .compact .nm .rkn{margin-left:8px;font-size:11px;font-weight:700;color:var(--stall-fg);background:var(--stall-bg);border:1px solid var(--stall-edge);border-radius:999px;padding:0 7px}
+.compact .nm .rkn.gap{color:var(--ink);background:var(--surface);border-color:var(--line)}
 .compact .nm .rkn[hidden]{display:none}
 /* console: header actions, dialogs, conversation, documents, tools */
 .acts{display:inline-flex;gap:6px;flex:none;margin-left:auto}.acts[hidden]{display:none}.acts:not([hidden])+.seg{margin-left:0}
@@ -1911,7 +2133,12 @@ ol.steps li.sc{background:Highlight;border-color:Highlight}ol.steps li.sk{border
 <footer class="foot"><span id="foot-build"></span><span id="foot-ro"></span><button type="button" class="tog" id="keys-btn" aria-controls="help" aria-expanded="false"></button><label class="older"><input type="checkbox" id="keys-on" checked><span id="keys-on-text"></span></label></footer>
 <p id="help" class="helpline" role="region" hidden></p>
 <dialog id="ctl" class="dlg" aria-labelledby="ctl-h" aria-describedby="ctl-p"><form id="ctl-form" class="dlg-in" method="dialog" novalidate>
-<h2 id="ctl-h"></h2><p id="ctl-run" class="dlg-run" dir="auto"></p><p id="ctl-p" class="dlg-p"></p>
+<h2 id="ctl-h"></h2>
+<dl class="dlg-who"><div><dt id="ctl-project-l"></dt><dd id="ctl-project" dir="auto"></dd></div>
+<div><dt id="ctl-job-l"></dt><dd id="ctl-job" dir="auto"></dd></div>
+<div><dt id="ctl-id-l"></dt><dd id="ctl-id" dir="auto"></dd></div></dl>
+<p id="ctl-p" class="dlg-p"></p>
+<label class="sure" for="ctl-sure"><input type="checkbox" id="ctl-sure"><span id="ctl-sure-l"></span></label>
 <label class="dlg-lbl" id="ctl-reason-l" for="ctl-reason"></label><textarea id="ctl-reason" rows="2" dir="auto" aria-describedby="ctl-err"></textarea>
 <p id="ctl-err" class="dlg-err" hidden></p>
 <div class="dlg-btns"><button type="button" class="btn cbtn" id="ctl-cancel"></button><button type="submit" class="btn cbtn" id="ctl-ok"></button></div>
@@ -2057,6 +2284,7 @@ function attnOf(v){
  else if(s==="awaiting_user"||s==="blocked"||lv==="wait")g="you";else if(cls>=2||lv==="stale")g="stalled";
  return {group:g,code:"working",rank:GROUPS.indexOf(g),level:lv,since:null,since_ts:null,head:L["ui_g_"+g],
   what:(v.live||{}).text||"",do:"",command:"",where:"none"};}
+function runSeconds(v){const n=v&&v.timing&&v.timing.run;return typeof n==="number"&&isFinite(n)?n:0;}
 function sortItems(items){
  return items.slice().sort((x,y)=>{
   const gx=x.a.group,gy=y.a.group;if(gx!==gy)return GROUPS.indexOf(gx)-GROUPS.indexOf(gy);
@@ -2065,6 +2293,7 @@ function sortItems(items){
   if(gx==="you"||gx==="stalled"){const ax=x.a.since_ts==null?Infinity:x.a.since_ts,ay=y.a.since_ts==null?Infinity:y.a.since_ts;
    d=ax===ay?0:ax<ay?-1:1;}
   else if(gx==="done"){d=(y.v.state_updated_ts||0)-(x.v.state_updated_ts||0);}
+  else d=runSeconds(y.v)-runSeconds(x.v);   // a run that has already lasted longer stays above a younger one
   return d||cmpStr(lc(x.v.project_name),lc(y.v.project_name))||cmpStr(String(x.v.run_id),String(y.v.run_id));});}
 
 // ---------------------------------------------------------------- activity feed
@@ -2222,7 +2451,7 @@ function patchHead(st,v,a){
  }else{if(st.ageRec)st.ageRec.off=true;setText(r.age,"");}
  setText(r.h3,v.project_name);setText(r.title,v.title);setAttr(r.title,"title",v.title);
  setText(r.rid,v.run_id);
- setText(r.tags," \u00b7 "+[v.size,v.engine].concat(v.mode==="headless"?["headless"]:[]).filter(Boolean).join(" \u00b7 "));
+ setText(r.tags," \u00b7 "+[v.size,v.engine,v.model].concat(v.mode==="headless"?["headless"]:[]).filter(Boolean).join(" \u00b7 "));
  setText(r.what,a.what||"");setText(r.do,a.do||"");
  if(a.command){
   show(r.cmd,true);setText(r.cmdCode,a.command);
@@ -2248,15 +2477,18 @@ function patchControls(st,v,a){
 function ctlErr(msg,field){
  const e=$("ctl-err");setText(e,msg||"");show(e,!!msg);S.ctlBad=!!(msg&&field);
  setAttr($("ctl-reason"),"aria-invalid",S.ctlBad?"true":null);if(msg)announce(msg);}
-function ctlLabels(c){const ok=$("ctl-ok"),ab=c.action==="abort";
+function ctlLabels(c){const ok=$("ctl-ok"),ab=c.action==="abort",sure=$("ctl-sure").checked;
  setText(ok,S.ctlBusy[c.key]?(ab?L.ui_ctl_busy_abort:L.ui_ctl_busy_pause):(ab?L.ui_ctl_ok_abort:L.ui_ctl_ok_pause));
- setCls(ok,"btn cbtn "+(ab?"danger":"warn"));ok.disabled=!!S.ctlBusy[c.key];}
+ setCls(ok,"btn cbtn "+(ab?"danger":"warn"));ok.disabled=!!S.ctlBusy[c.key]||!sure;}
 function openCtl(st,action,btn){
  const v=st.v;if(!v||!canControl(v,st.a))return;
- const c=S.ctl={key:st.key,action:action,btn:btn,name:v.project_name+" "+v.run_id,project:v.project_name},d=$("ctl");
- setText($("ctl-h"),action==="abort"?L.ui_ctl_abort_h:L.ui_ctl_pause_h);
- setText($("ctl-run"),[v.project_name,v.run_id,v.title].filter(Boolean).join(" \u00b7 "));
- setText($("ctl-p"),action==="abort"?L.ui_ctl_abort_p:L.ui_ctl_pause_p);
+ const c=S.ctl={key:st.key,action:action,btn:btn,name:v.project_name+" "+v.run_id,project:v.project_name},d=$("ctl"),ab=action==="abort";
+ setText($("ctl-h"),ab?L.ui_ctl_abort_h:L.ui_ctl_pause_h);
+ setText($("ctl-project-l"),L.ui_ctl_project);setText($("ctl-project"),v.project_name||"");
+ setText($("ctl-job-l"),L.ui_ctl_job);setText($("ctl-job"),v.title||v.run_id||"");
+ setText($("ctl-id-l"),L.ui_ctl_id);setText($("ctl-id"),v.run_id||"");
+ setText($("ctl-p"),ab?L.ui_ctl_abort_p:L.ui_ctl_pause_p);
+ setText($("ctl-sure-l"),ab?L.ui_ctl_sure_abort:L.ui_ctl_sure_pause);$("ctl-sure").checked=false;
  setText($("ctl-reason-l"),L.ui_ctl_reason);setAttr($("ctl-reason"),"placeholder",L.ui_ctl_reason_ph);$("ctl-reason").value="";
  setText($("ctl-cancel"),L.ui_ctl_cancel);ctlErr("");ctlLabels(c);setData(d,"action",action);
  try{if(typeof d.showModal==="function"){if(!d.open)d.showModal();}else setAttr(d,"open","");}catch(e){setAttr(d,"open","");}
@@ -2290,6 +2522,7 @@ async function submitCtl(ev){
  const c=S.ctl;if(!c||S.ctlBusy[c.key])return;
  const reason=String($("ctl-reason").value||"").replace(/\s+/g," ").trim();
  if(reason.length>REASON_MAX){ctlErr(fmt(L.ui_ctl_err_reason_long,{n:reason.length}),true);try{$("ctl-reason").focus();}catch(e){}return;}
+ if(!$("ctl-sure").checked){ctlErr(L.ui_ctl_err_sure,false);try{$("ctl-sure").focus();}catch(e){}return;}
  S.ctlBusy[c.key]=true;ctlErr("");ctlLabels(c);refreshControls(c.key);
  const res=await sendControl(c.key,c.action,reason);
  S.ctlBusy[c.key]=false;refreshControls(c.key);
@@ -2346,11 +2579,12 @@ function cellTests(t){
 function patchTasks(st,v,a){
  const r=st.r,total=v.tasks_total|0,box=st.parts.tasks;
  show(box,total>0);if(!total)return;
- const c=taskCounts(v),fin=(c.done||0)+(c.deferred||0);
+ const c=taskCounts(v),fin=c.done||0;
  const bits=[fmt(L.tasks_done,{done:v.tasks_done,total:total})];
  if(c.in_progress)bits.push(fmt(L.ui_t_progress,{n:c.in_progress}));
  if(c.blocked)bits.push(fmt(L.ui_t_blocked,{n:c.blocked}));
  if(c.pending)bits.push(fmt(L.ui_t_todo,{n:c.pending}));
+ if(c.deferred)bits.push(fmt(L.ui_t_deferred,{n:c.deferred}));
  setText(r.tl,bits.join(" \u00b7 "));setAttr(r.tbar,"aria-label",bits.join(", "));
  [[r.tbD,fin],[r.tbP,c.in_progress],[r.tbB,c.blocked]].forEach(x=>{const w=(100*(x[1]||0)/total).toFixed(2)+"%";
   if(x[0].style.width!==w)x[0].style.width=w;show(x[0],!!x[1]);});
@@ -2369,7 +2603,7 @@ function buildTable(st,v){
  heads.forEach(h=>{const th=el("th","",h);th.setAttribute("scope","col");hr.append(th);});
  hd.append(hr);
  (v.tasks||[]).forEach(t=>{const tr=el("tr");
-  const tt=el("td","",t.title);tt.dir="auto";
+  const tt=el("td","task",t.title);tt.dir="auto";
   tr.append(el("td","id",t.id),tt,cellStatus(t));
   if(withT)tr.append(cellTests(t));
   body.append(tr);});
@@ -2608,8 +2842,12 @@ function patchItem(st,v,a){
  st.v=v;st.a=a;const c=st.c,b=badgeParts(a);
  setCls(st.el,"item g-"+a.group);setText(c.gl,b.gl);setText(c.bw,b.bw);setText(c.pn,v.project_name);setText(c.rid," "+v.run_id);
  setText(c.sub,v.title);setAttr(c.btn,"title",fmt(L.ui_expand,{name:v.project_name+" "+v.run_id}));
+ const gap=v.status==="done"?((v.tasks_by_status||{}).deferred|0)+((v.tasks_by_status||{}).pending|0)+((v.tasks_by_status||{}).blocked|0)+((v.tasks_by_status||{}).in_progress|0):0;
  const rc=v.risk_counts||{},rn=(rc.high|0)+(rc.medium|0)+(rc.blocked|0);
- show(c.rkn,rn>0);setText(c.rkn,rn>0?fmt(L.ui_risk_n,{n:rn}):"");setAttr(c.rkn,"title",rn>0?riskSum(rc):null);
+ const showGap=gap>0,showRisk=!showGap&&v.status!=="done"&&rn>0;
+ show(c.rkn,showGap||showRisk);setCls(c.rkn,showGap?"rkn gap":"rkn");
+ setText(c.rkn,showGap?fmt(L.ui_gap_n,{n:gap}):(showRisk?fmt(L.ui_risk_n,{n:rn}):""));
+ setAttr(c.rkn,"title",showGap?fmt(L.ui_gap_n,{n:gap}):(showRisk?riskSum(rc):null));
  const ts=a.group==="done"?(v.state_updated_ts||v.last_event_ts||0):(v.last_event_ts||v.state_updated_ts||0);
  if(!st.ageRec)st.ageRec=bind(st,"item",c.age,ts,null);
  st.ageRec.ts=ts;
@@ -3170,6 +3408,7 @@ function boot(){
  S.radarAll=lsGet("orkestra.dash.radar")==="1";
  $("radar-tog").addEventListener("click",()=>{S.radarAll=!S.radarAll;lsSet("orkestra.dash.radar",S.radarAll?"1":"0");renderRadar();});
  $("ctl-form").addEventListener("submit",submitCtl);
+ $("ctl-sure").addEventListener("change",()=>{if(S.ctl){if($("ctl-sure").checked)ctlErr("");ctlLabels(S.ctl);}});
  $("ctl-cancel").addEventListener("click",()=>{if(S.ctl&&!S.ctlBusy[S.ctl.key])closeCtl();});
  $("ctl").addEventListener("cancel",e=>{if(S.ctl&&S.ctlBusy[S.ctl.key]&&e.preventDefault)e.preventDefault();});
  $("ctl").addEventListener("close",()=>{if(S.ctl)closeCtl();});

@@ -706,6 +706,20 @@ def deny_stopped(ev: dict, stop: dict) -> None:
         activity.record(project, str(stop.get("run_id") or ""), ev, "deny", f"[stopped] {verb} from the dashboard")
 
 
+def _request_asks_deploy(binding: dict) -> bool:
+    """The run's own request asked to publish. A later "continue" does not take that back."""
+    try:
+        state = binding.get("state") if isinstance(binding.get("state"), dict) else {}
+        rid = str(binding.get("run_id") or state.get("run_id") or "")
+        project = Path(str(binding.get("project") or ""))
+        if not rid or not project.is_dir():
+            return False
+        text = (paths.feature_dir(project, rid) / "request.md").read_text(encoding="utf-8")
+    except (OSError, TypeError, ValueError):
+        return False
+    return bool(intent.deploy_requested(text))
+
+
 def on_pre_tool(ev: dict) -> None:
     stop = ST.stop_for(ev.get("session_id") or "")
     if stop and not stop_allows(ev):
@@ -713,7 +727,9 @@ def on_pre_tool(ev: dict) -> None:
         return
     cfg = paths.global_config()
     b = binding_for(ev)
-    grants = ST.current_grant(ev.get("session_id") or "", ev.get("prompt_id"))
+    grants = list(ST.current_grant(ev.get("session_id") or "", ev.get("prompt_id")))
+    if b and "deploy" not in grants and _request_asks_deploy(b):
+        grants.append("deploy")
     ctx = git_context(ev)
     if ctx:
         ev = dict(ev, _git_ctx=ctx)

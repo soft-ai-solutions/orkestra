@@ -312,8 +312,14 @@ _SIGKILL = {"-9", "-KILL", "-SIGKILL"}
 _PIPE_SHELLS = {"sh", "bash", "zsh", "dash", "ksh", "python", "python3", "node", "perl", "ruby"}
 _QUOTED = re.compile(r"\"[^\"]*\"|'[^']*'")
 _BARE_ENV = re.compile(r"(?:^|[;&|(])\s*(?:sudo\s+)?env\s*(?:$|[;&|)>])")
-_PIPE_FETCH = re.compile(r"\b(?:curl|wget)\b[^|;&]*\|\s*(?:sudo\s+)?(?:\S*/)?(?:sh|bash|zsh|dash|ksh|python3?|node|perl|ruby)\b")
+_PIPE_SHELL = re.compile(r"\b(?:curl|wget)\b[^|;&]*\|\s*(?:sudo\s+)?(?:\S*/)?(?:sh|bash|zsh|dash|ksh)\b")
+_PIPE_INTERP = re.compile(r"\b(?:curl|wget)\b[^|;&]*\|\s*(?:sudo\s+)?(?:\S*/)?(?:python3?|node|perl|ruby)\b")
 _SUBST_FETCH = re.compile(r"(?:\b(?:bash|sh|zsh|dash|ksh)\s+<\(|\$\(|`)\s*(?:curl|wget)\b")
+# Product hosts this workspace publishes. A HEAD or body check of these is not "run the download".
+_OWN_SITE = re.compile(
+    r"(?:^|\.)(?:puzzleo\.lol|namazvakitleri\.co|zaynews\.com|estimationline\.com|retroep\.com|"
+    r"edevrun\.com|kolaytacir\.com|kocabayticaret\.com|firatkocabay\.workers\.dev)$", re.I)
+_INLINE_EVAL = ("-c", "-e", "--eval")
 _DISK_REDIRECT = re.compile(r"^/dev/(?:r?disk|sd|nvme|hd|vd)")
 
 
@@ -392,6 +398,26 @@ def _infra_destroy(seg: Segment) -> bool:
     return False
 
 
+def _own_or_local(host: str) -> bool:
+    raw = (host or "").strip().strip("[]")
+    if _LOCAL_HOST.match(host or "") or _LOCAL_HOST.match(raw):
+        return True
+    return bool(_OWN_SITE.search(raw.lower()))
+
+
+def _own_site_inline_check(segs: List[Segment]) -> bool:
+    """True when every curl/wget host is one of our sites or loopback, and every interpreter is an inline
+    check (`python3 -c`, `node -e`). `curl | sh` and `curl | python3` (the body is the program) stay dangerous."""
+    fetches = [s for s in segs if s.program in ("curl", "wget")]
+    interps = [s for s in segs if s.program in ("python", "python3", "node", "perl", "ruby")]
+    if not fetches or not interps:
+        return False
+    hosts = [h for s in fetches for h in _hosts(s.args)]
+    if not hosts or any(not _own_or_local(h) for h in hosts):
+        return False
+    return all(any(a == flag or a.startswith(flag) for flag in _INLINE_EVAL for a in s.args) for s in interps)
+
+
 def _bash(cmd: str, project: str, home: str) -> Set[str]:
     found: Set[str] = set()
     segs = shellparse.segments(cmd)
@@ -399,8 +425,9 @@ def _bash(cmd: str, project: str, home: str) -> Set[str]:
     has_fetch = bool(programs & {"curl", "wget"})
     stripped = _QUOTED.sub('""', cmd)
 
-    if has_fetch and (_PIPE_FETCH.search(stripped)
-                      or (_SUBST_FETCH.search(cmd) and programs & (_PIPE_SHELLS | {"__SUBST__"}))):
+    if has_fetch and (_PIPE_SHELL.search(stripped)
+                      or (_SUBST_FETCH.search(cmd) and programs & (_PIPE_SHELLS | {"__SUBST__"}))
+                      or (_PIPE_INTERP.search(stripped) and not _own_site_inline_check(segs))):
         found.add("pipe_shell")
     if _BARE_ENV.search(stripped):
         found.add("secrets_read")

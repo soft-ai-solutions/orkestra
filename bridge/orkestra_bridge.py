@@ -105,6 +105,11 @@ DEFAULTS: Dict[str, Any] = {
     "allowed_projects": [],          # empty = every folder in the workspace
     "watchdog_interval": 60,         # seconds between `orkestra watchdog` scans inside the bridge (0 = off)
     "auto_resume_delays": [2, 60, 300],  # pause before the 1st/2nd/3rd automatic continuation of a stalled job
+    # owner commands (Telegram passphrase, checked by the OpenClaw plugin): best model, no questions, no stopping
+    "owner_model": "fable",
+    "owner_fallback_model": "opus",
+    "owner_effort": "xhigh",
+    "owner_max_auto_resumes": 8,     # automatic continuations of a stalled owner job (others: watchdog.max_auto_resumes)
     "telegram": {"bot_token": "", "allowed_chat_ids": [], "allowed_user_ids": [], "poll": True},
 }
 
@@ -407,12 +412,39 @@ def watchdog_cfg() -> Dict[str, Any]:
     return out
 
 
+# Model-facing (English whatever the UI language). Avoids the words intent.py reads as git or approval requests: the
+# owner grant (state.OWNER_GRANTS) carries the permissions, not this text.
+OWNER_NOTE = (
+    "\n\n[Owner command: the owner confirmed this request with their passphrase. Run it end to end in autopilot and "
+    "do not stop for questions: when a choice comes up, take the recommended option, record it as an assumption and "
+    "carry on until the work is finished and verified. Every step the request needs is authorised for this run: "
+    "committing, pushing to a branch, opening pull requests, tagging, and running the project's own deploy or release "
+    "scripts once the gates pass. Never do what cannot be undone: no rewriting of published history, no throwing "
+    "away uncommitted work, no recursive deletes outside a temporary folder, no deleting cloud resources, servers, "
+    "databases or data, no reading or printing secret files. If only an irreversible step is left, finish everything "
+    "else and give the owner the exact command.]")
+OWNER_SOURCES = ("openclaw", "cli")
+
+
+def owner_args(cfg: Dict[str, Any]) -> List[str]:
+    out: List[str] = []
+    for flag, key in (("--model", "owner_model"), ("--fallback-model", "owner_fallback_model"),
+                      ("--effort", "owner_effort")):
+        if str(cfg.get(key) or "").strip():
+            out += [flag, str(cfg[key]).strip()]
+    return out
+
+
 def start_job(cfg: Dict[str, Any], project_name: str, request: str, chat_id: Optional[str],
-              source: str = "api", engine: Optional[str] = None) -> Dict[str, Any]:
+              source: str = "api", engine: Optional[str] = None, owner: bool = False) -> Dict[str, Any]:
     project = resolve_project(cfg, project_name)
     request = (request or "").strip()
     if len(request) < 3:
         raise ValueError(t("bridge.job.empty_request"))
+    if owner:
+        if source not in OWNER_SOURCES:
+            raise ValueError(t("bridge.job.owner_source", source=source))
+        engine = "claude"                   # the owner gets the best model, which only the claude engine selects here
     engine = pick_engine(cfg, engine)
     approval_mode = "manual" if INTENT.manual_approval_requested(request) else "autopilot"
     try:
@@ -435,6 +467,8 @@ def start_job(cfg: Dict[str, Any], project_name: str, request: str, chat_id: Opt
                "chat_id": chat_id, "session_id": str(uuid.uuid4()), "status": "queued", "created": now(),
              "turns": [], "last_message": "", "engine": engine,
                "approval_mode": approval_mode}
+        if owner:
+            job["owner"] = True
         if engine == "copilot":
             _store_copilot_profile(job, copilot_profile)
         save_job(job)
@@ -471,6 +505,8 @@ def start_job(cfg: Dict[str, Any], project_name: str, request: str, chat_id: Opt
             if ST.bind_session(sid, project, rid, engine="pi"):
                 ACT.record(project, rid, {"session_id": sid}, "bind", "pi session")
     save_job(job)
+    if owner:
+        note += OWNER_NOTE
     run_turn(cfg, job, EN.run_prompt(engine, request + note), new=True, said=f"/orkestra-run {request}{note}")
     return job
 
@@ -678,9 +714,14 @@ def _prepare_turn(cfg: Dict[str, Any], job: Dict[str, Any], prompt: str, new: bo
         spec = EN.headless_command("pi", binary, job["session_id"], prompt, new, {})
     else:
         binary = str(cfg["claude_bin"])
+        extra = list(cfg.get("extra_args") or [])
+        if job.get("owner"):
+            extra += owner_args(cfg)
+            from orkestra_core import state as ST
+            ST.write_owner_grant(str(job.get("session_id") or ""), str(job["id"]))   # every turn renews it
         spec = EN.headless_command("claude", binary, job["session_id"], prompt, new,
                                    {"permission_mode": cfg["permission_mode"], "max_turns": cfg["max_turns"],
-                                    "extra_args": cfg.get("extra_args"),
+                                    "extra_args": extra,
                                     "max_budget_usd": (OP.global_config().get("headless") or {}).get("max_budget_usd")})
     return {"spec": spec, "binary": binary, "engine": engine, "prompt": prompt, "said": said, "new": new}
 
@@ -822,6 +863,8 @@ def _start_turn(cfg: Dict[str, Any], job: Dict[str, Any], prep: Dict[str, Any]) 
             # The claude process exited while the run is still active and is not waiting for the user: continue it on
             # the SAME session (no second driver exists — this process just ended), a limited number of times.
             wdc = watchdog_cfg()
+            if fresh.get("owner"):              # an owner job keeps going unless the person turned auto-resume off
+                wdc["max_auto_resumes"] = max(int(wdc["max_auto_resumes"]), int(cfg.get("owner_max_auto_resumes") or 0))
             done_n = int(fresh.get("auto_resumes") or 0)
             if wdc["auto_resume"] in ("headless", "all") and done_n < int(wdc["max_auto_resumes"]):
                 delays = list(cfg.get("auto_resume_delays") or [2, 60, 300])
@@ -855,6 +898,9 @@ def _start_turn(cfg: Dict[str, Any], job: Dict[str, Any], prep: Dict[str, Any]) 
             fresh["status"] = "awaiting_user"
             if done_n:
                 message += "\n\n" + t("bridge.turn.auto_resume_cap", count=done_n)
+        if fresh.get("owner") and fresh["status"] in ("done", "error", "cancelled"):
+            from orkestra_core import state as ST
+            ST.clear_owner_grant(str(fresh.get("session_id") or ""))
         fresh["last_message"] = message.strip()
         fresh["turns"][-1]["exit"] = proc.returncode
         if not _save_unless_cancelled(fresh):
@@ -883,6 +929,9 @@ def cancel_job(job: Dict[str, Any]) -> None:
         job.pop("driver", None)
         job["status"] = "cancelled"
         save_job(job)
+    if job.get("owner"):
+        from orkestra_core import state as ST
+        ST.clear_owner_grant(str(job.get("session_id") or ""))
     try:
         subprocess.run([sys.executable, str(ORKESTRA_BIN), "abort", "-p", job["project_path"], "bridge: user cancelled"],
                        capture_output=True, timeout=30)
@@ -1202,7 +1251,7 @@ class Handler(BaseHTTPRequestHandler):
             if url.path == "/jobs":
                 job = start_job(self.cfg, str(data.get("project", "")), str(data.get("request", "")),
                                 data.get("chat_id"), str(data.get("source") or "api")[:40],
-                                str(data.get("engine") or "") or None)
+                                str(data.get("engine") or "") or None, owner=data.get("owner") is True)
                 return self._send(202, public(job))
             m = re.match(r"^/jobs/([a-f0-9]+)/cancel$", url.path)
             if m:

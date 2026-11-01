@@ -18,9 +18,9 @@ export function createOrkestraClient({
   env,
   timeoutMs = 45_000,
 }) {
-  async function call(args) {
+  async function call(args, ms = timeoutMs) {
     const result = await runner([python, clientPath, ...args], {
-      timeoutMs,
+      timeoutMs: ms,
       env,
     });
     let body = null;
@@ -45,18 +45,23 @@ export function createOrkestraClient({
   }
 
   return {
-    /** Starts a run: `/yap [engine] <project> <request>`. */
-    start: (project, request, chatId, engine) =>
+    /** Starts a run: `/yap [engine] <project> <request>`; `owner` = an owner command (passphrase checked here). */
+    start: (project, request, chatId, engine, owner = false) =>
       call([
         "start",
         project,
         request,
         ...(engine ? ["--engine", engine] : []),
+        ...(owner ? ["--owner"] : []),
         "--chat-id",
         chatId,
         "--source",
         "openclaw",
       ]),
+    /** Starts the bridge when it is not running (launchd on macOS). */
+    ensure: () => call(["ensure"], 60_000),
+    /** Brings back the bridge, the dashboard and the given IDE apps. */
+    revive: (apps) => call(["revive", ...apps.flatMap((a) => ["--app", a])], 120_000),
     /** Answers one specific job (the one the user replied to). */
     reply: (jobId, text) => call(["reply", jobId, text]),
     /** Jobs of this chat. */

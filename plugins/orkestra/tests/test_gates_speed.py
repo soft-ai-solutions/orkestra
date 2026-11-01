@@ -373,6 +373,7 @@ class TestResume(RunBase):
         R.gates_baseline(self.proj, self.rid)
         for f in ("ran-x", "ran-y"):
             (self.proj / f).unlink(missing_ok=True)
+        (self.proj / "calc.py").write_text("def add(a, b):\n    return a + b + 1\n")
         real = G.run_gate
 
         def boom(project, gate, *a, **kw):
@@ -465,16 +466,16 @@ class TestCarryForward(RunBase):
 
     def test_only_the_gate_whose_paths_changed_runs_again(self):
         R.gates_verify(self.proj, self.rid)
-        self.assertEqual((self.runs("docs"), self.runs("test")), (1, 1))
+        self.assertEqual((self.runs("docs"), self.runs("test")), (0, 0))  # baseline stands
         (self.proj / "docs" / "x.md").write_text("hello")
         R.gates_verify(self.proj, self.rid)
-        self.assertEqual((self.runs("docs"), self.runs("test")), (2, 1))
+        self.assertEqual((self.runs("docs"), self.runs("test")), (1, 0))
         res = self.results()
         self.assertEqual(res["test"]["carried_from"].startswith("verify-"), True)
         self.assertNotIn("carried_from", res["docs"])
         (self.proj / "src" / "a.ts").write_text("export {}")
         R.gates_verify(self.proj, self.rid)
-        self.assertEqual((self.runs("docs"), self.runs("test")), (2, 2))
+        self.assertEqual((self.runs("docs"), self.runs("test")), (1, 1))
         self.assertIn("carried_from", self.results()["docs"])
 
     def test_a_revert_is_a_change_too(self):
@@ -487,7 +488,7 @@ class TestCarryForward(RunBase):
     def test_all_forces_every_gate_and_a_failed_result_is_never_carried(self):
         R.gates_verify(self.proj, self.rid)
         R.gates_verify(self.proj, self.rid, full=True)
-        self.assertEqual((self.runs("docs"), self.runs("test")), (2, 2))
+        self.assertEqual((self.runs("docs"), self.runs("test")), (1, 1))
         self.set_gates([{"name": "docs", "cmd": "echo d >> ran-docs; exit 1", "kind": "lint", "paths": ["docs/**"]}])
         R.gates_verify(self.proj, self.rid)
         n = self.runs("docs")
@@ -499,14 +500,22 @@ class TestCarryForward(RunBase):
         R.gates_baseline(self.proj, self.rid)
         R.gates_verify(self.proj, self.rid)
         R.gates_verify(self.proj, self.rid)
-        self.assertEqual(self.runs("plain"), 3)                    # baseline + two verifies
+        self.assertEqual(self.runs("plain"), 3)                    # the gate writes into the tree, so each verify runs
 
     def test_deliver_demands_one_full_verify_when_gates_were_carried(self):
+        (self.proj / "docs" / "x.md").write_text("hello")
         R.gates_verify(self.proj, self.rid)
-        R.gates_verify(self.proj, self.rid)                        # carries both
+        R.gates_verify(self.proj, self.rid)                        # the untouched gate is carried
         st = load_state(self.proj, self.rid)
         self.assertIn("carried gates forward", " ".join(R.preconditions(self.proj, st, "deliver")))
         R.gates_verify(self.proj, self.rid, full=True)
+        self.assertNotIn("carried gates forward", " ".join(R.preconditions(self.proj, st, "deliver")))
+
+    def test_an_unchanged_tree_reuses_the_baseline_and_may_deliver(self):
+        R.gates_verify(self.proj, self.rid)
+        self.assertEqual((self.runs("docs"), self.runs("test")), (0, 0))
+        self.assertTrue(all(r.get("unchanged_tree") for r in self.verify_doc()["results"]))
+        st = load_state(self.proj, self.rid)
         self.assertNotIn("carried gates forward", " ".join(R.preconditions(self.proj, st, "deliver")))
 
     def test_carried_gates_are_reported_in_both_languages(self):

@@ -130,6 +130,17 @@ class TestParserFixes(unittest.TestCase):
                   "node -e \"require('fs').writeFileSync('.orkestra/runs/001-x/approval.json','{}')\"",
                   "python3 -c \"import os; os.replace('a', '.orkestra/runs/001-x/state.json')\""):
             self.assertTrue(decide(bash(w), b).denied, w)
+        gates = ("python3 -c \"import json; d=json.load(open('.orkestra/runs/001-x/gates-verify.json')); "
+                 "print(sorted(d))\"")
+        self.assertFalse(decide(bash(gates), b).denied)
+        self.assertTrue(decide(bash("python3 -c \"import orkestra_core\""), b).denied)
+
+    def test_rm_of_a_literal_temp_variable_is_allowed(self):
+        b = binding()
+        ok = 'STATE=/tmp/sakabaz-wrangler-sc006; rm -rf "$STATE"'
+        self.assertFalse(decide(bash(ok), b).denied)
+        self.assertTrue(decide(bash('rm -rf "$STATE"'), b).denied)
+        self.assertTrue(decide(bash("rm -rf src"), b).denied)
 
     def test_readonly_denial_tells_where_to_experiment(self):
         d = decide(bash("cp src/a.ts src/a.ts.bak", agent="orkestra:reviewer"), binding())

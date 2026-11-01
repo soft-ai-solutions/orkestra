@@ -118,6 +118,30 @@ class TestIntent(unittest.TestCase):
         self.assertEqual(approval_answer("Değişiklik istiyorum"), "reject")
         self.assertEqual(approval_answer("İptal et"), "reject")
 
+    def test_deploy_requested_only_for_a_clear_ask(self):
+        from orkestra_core.intent import deploy_requested, prompt_grants
+        yes = [
+            "tüm testler başarılıysa prod build ve deploy yap",
+            "deploy et",
+            "npm run deploy",
+            "Deploy: kullanici kapilar yesil olunca uretim komutunu istedi.",
+        ]
+        no = [
+            "deploy guard reddederse ship.md yaz",
+            "deploy etme",
+            "don't deploy",
+            "add a deploy button to the settings page",
+            "what is a deploy?",
+        ]
+        for text in yes:
+            with self.subTest(text=text):
+                self.assertTrue(deploy_requested(text))
+                self.assertIn("deploy", prompt_grants(text))
+        for text in no:
+            with self.subTest(text=text):
+                self.assertFalse(deploy_requested(text))
+                self.assertNotIn("deploy", prompt_grants(text))
+
     def test_git_grants(self):
         for text, expected in GRANT_CASES.items():
             with self.subTest(text=text):

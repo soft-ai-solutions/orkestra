@@ -274,6 +274,15 @@ class TestRunGuards(unittest.TestCase):
         self.assertTrue(decide(write("/w/other/src/a.ts"), b).denied)
         self.assertTrue(decide(bash("cp a.ts /w/other/a.ts"), b).denied)
         self.assertFalse(decide(write("/tmp/x.txt"), b).denied)
+        # Cursor's own agent transcripts are scratch, not another product.
+        scratch = str(Path.home() / ".cursor" / "projects" / "example-workspace" / "note.md")
+        self.assertFalse(decide(write(scratch), b).denied)
+        self.assertFalse(decide(write(scratch, agent="orkestra:reviewer"), b).denied)
+        self.assertFalse(decide(bash(f"echo x > {scratch}"), b).denied)
+        # The same relaxation does not open another project, a key file, or a recursive delete.
+        self.assertTrue(decide(write("/w/other/src/a.ts", agent="orkestra:reviewer"), b).denied)
+        self.assertTrue(decide(write(str(Path.home() / ".ssh" / "id_rsa")), b).denied)
+        self.assertTrue(decide(bash("rm -rf /w/proj/src"), b).denied)
 
     def test_isolation_into_another_project_tells_the_driver_how_to_switch(self):
         import tempfile
@@ -342,6 +351,9 @@ class TestRunGuards(unittest.TestCase):
             self.assertTrue(decide(bash(c), b).denied, c)
         for c in ["vercel dev", "npm run build", "prisma migrate dev --name x", "docker build .", "rsync -av a/ b/"]:
             self.assertFalse(decide(bash(c), b).denied, c)
+        self.assertFalse(decide(bash("npm run deploy:prod"), b, grants=["deploy"]).denied)
+        self.assertFalse(decide(bash("npx wrangler deploy"), b, grants=["deploy"]).denied)
+        self.assertTrue(decide(bash("npx wrangler delete"), b, grants=["deploy"]).denied)
 
     def test_no_binding_no_run_guards(self):
         self.assertFalse(decide(write("/w/other/x.ts")).denied)

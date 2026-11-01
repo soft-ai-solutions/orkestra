@@ -231,7 +231,7 @@ after(async () => {
 
 test("registers /yap, /durum, /iptal (and their English names), before_dispatch and the notifier", { skip: E2E_SKIP }, () => {
   // Each Turkish command also exists as /run, /runs and /cancel (/status is reserved by OpenClaw itself).
-  assert.deepEqual(Object.keys(commands).sort(), ["cancel", "durum", "iptal", "run", "runs", "yap"]);
+  assert.deepEqual(Object.keys(commands).sort(), ["cancel", "durum", "ide", "iptal", "run", "runs", "yap"]);
   assert.equal(typeof hooks.before_dispatch, "function");
   assert.equal(service.id, "orkestra-bridge-notifier");
   for (const def of Object.values(commands)) {
@@ -441,4 +441,37 @@ test("a restarted notifier does not repeat old notifications", { skip: E2E_SKIP 
   await service.start({ stateDir: path.join(tmp, "state"), logger });
   await sleep(1500);
   assert.equal(sent.length, before);
+});
+
+test("owner command: the passphrase starts an owner job on the real bridge, with the grant until /iptal", { skip: E2E_SKIP }, async () => {
+  const { ownerPhraseDigest } = await import(path.join(tmp, "plugin", "logic.js"));
+  const ownerHooks = {};
+  const ownerCommands = {};
+  plugin.register({
+    pluginConfig: { chatId: CHAT, clientPath: CLIENT, ownerCommand: ownerPhraseDigest("e2e-salt-0123456789", "open sesame now") },
+    logger,
+    runtime: { system: { runCommandWithTimeout: runner } },
+    registerCommand: (def) => {
+      ownerCommands[def.name] = def;
+    },
+    on: (name, fn) => {
+      ownerHooks[name] = fn;
+    },
+    registerService: () => {},
+  });
+  const res = await ownerHooks.before_dispatch(
+    { channel: "telegram", senderId: CHAT, content: "Open Sesame Now: demo projesinde README'ye bir satır ekle" },
+    {},
+  );
+  assert.equal(res.handled, true);
+  const jobId = /Sahip komutu başladı: \[demo\] iş ([a-f0-9]{12})/.exec(res.text)?.[1];
+  assert.ok(jobId, res.text);
+  const job = JSON.parse(fs.readFileSync(path.join(orkHome, "bridge", "jobs", `${jobId}.json`), "utf8"));
+  assert.equal(job.owner, true);
+  assert.equal(job.engine, "claude");
+  assert.ok(!JSON.stringify(job.turns).toLowerCase().includes("sesame"));     // the passphrase never reaches the run
+  const grant = path.join(orkHome, "grants", "owner", `${job.session_id}.json`);
+  assert.ok(fs.existsSync(grant));
+  assert.match((await ownerCommands.iptal.handler({})).text, /İptal/);
+  await waitFor(() => !fs.existsSync(grant), "owner grant removed after /iptal");
 });

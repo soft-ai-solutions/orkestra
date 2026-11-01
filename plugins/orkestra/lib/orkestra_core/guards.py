@@ -801,7 +801,25 @@ DEPLOY_PATTERNS: List[Tuple[str, Any]] = [
 ]
 
 
-def deploy_guard(segs: List[sp.Segment]) -> Decision:
+# Words that make a remote action impossible to undo (deleted resources, dropped data, a schema push that may drop
+# columns, history rewritten on a server). Matched as whole words of the arguments, ssh's remote command included.
+REMOTE_DESTRUCTIVE_WORDS = frozenset((
+    "destroy", "delete", "remove", "rm", "rmdir", "uninstall", "purge", "prune", "drop", "dropdb", "truncate", "reset",
+    "down", "taint", "wipe", "shred", "mkfs", "dd", "force",
+))
+SCHEMA_PUSH = {"prisma": (["db", "push"], ["db", "execute"]), "supabase": (["db", "push"],), "drizzle-kit": (["push"],)}
+
+
+def remote_destructive(prog: str, args: List[str]) -> bool:
+    if any(args[:len(p)] == p for p in SCHEMA_PUSH.get(prog, ())):
+        return True
+    words = {w for a in args for w in re.split(r"[^a-z0-9]+", a.lower()) if w}
+    return bool(words & REMOTE_DESTRUCTIVE_WORDS)
+
+
+def deploy_guard(segs: List[sp.Segment], grants: Iterable[str] = ()) -> Decision:
+    """`deploy` in the grants (an explicit user request, or an owner command) lets a publish run. A destructive one never does."""
+    may_deploy = "deploy" in set(grants)
     for seg in segs:
         for prog, pred in DEPLOY_PATTERNS:
             if seg.program == prog:
@@ -809,6 +827,12 @@ def deploy_guard(segs: List[sp.Segment]) -> Decision:
                     hit = bool(pred(seg.args))
                 except Exception:
                     hit = False
+                if hit and may_deploy:
+                    if not remote_destructive(prog, seg.args):
+                        continue
+                    return deny("deploy", f"`{prog} {' '.join(seg.args[:3])}` would delete or overwrite something on a "
+                                          f"server, a cloud account or a database that cannot be restored. Owner "
+                                          f"commands never run these. Tell the owner the exact command instead.")
                 if hit:
                     return deny("deploy", f"`{prog} {' '.join(seg.args[:3])}` is a deploy/publish/remote/prod-DB action. "
                                           f"Orkestra never runs these during a run. Finish the run, then tell the user "
@@ -1197,10 +1221,21 @@ def unblock_line(event: Dict[str, Any], binding: Dict[str, Any]) -> str:
             f"(or `orkestra abort \"<reason>\" -p {project}` to end it).")
 
 
+def _is_cursor_agent_scratch(path: str) -> bool:
+    """Cursor's per-workspace agent transcripts (`~/.cursor/projects`). Not a product repo."""
+    n = _norm_path_markers(path).rstrip("/").casefold()
+    if n.endswith("/*"):
+        n = n[:-2]
+    root = str((Path.home() / ".cursor" / "projects").resolve(strict=False)).casefold()
+    return n == root or n.startswith(root + "/")
+
+
 def _classify(path: str, project: Path, feature_dir: Path) -> str:
     # compared case-insensitively: on a macOS volume `.ORKESTRA/runs/x/approval.json` IS the machine state
     path = str(path).casefold()
     project, feature_dir = Path(str(project).casefold()), Path(str(feature_dir).casefold())
+    if _is_cursor_agent_scratch(path):
+        return "temp"
     if path.endswith("/*"):
         base = Path(path[:-2])
         if is_relative_to(base, project / ".orkestra"):
@@ -1460,10 +1495,18 @@ def _calls_hook_entry(seg: sp.Segment, cwd: str, raw_program: str = "") -> bool:
 
 
 def _script_writes_run_state(raw: str) -> bool:
+    """True when a script would change `.orkestra/runs`, not when it only opens those files to print them.
+
+    Evidence logs stay on the narrow write test. Any other path under `.orkestra/runs` (gates, state, a
+    snapshot) is the same: `open(path)` and `json.load` are inspection. A write mode, `.write()`, `json.dump`,
+    unlink, or a path that climbs out with `..` still counts."""
     mentions = RUN_MENTION_RE.findall(raw)
+    cleaned = re.sub(r"&?>&?\s*(?:/dev/null\b|\d\b)", " ", raw)
     if mentions and all(RUN_READABLE_RE.search(m) for m in mentions):
         return bool(SCRIPT_WRITE_RE.search(raw))
-    return bool(SCRIPT_STRICT_RE.search(re.sub(r"&?>&?\s*(?:/dev/null\b|\d\b)", " ", raw)))
+    if mentions and all(".orkestra/runs" in m.lower() and ".." not in m for m in mentions):
+        return bool(SCRIPT_WRITE_RE.search(cleaned))
+    return bool(SCRIPT_STRICT_RE.search(cleaned))
 
 
 def _switch_project_hint(event: Dict[str, Any], project: Path, run_id: str, path: str) -> str:
@@ -1485,7 +1528,8 @@ def _switch_project_hint(event: Dict[str, Any], project: Path, run_id: str, path
             f"`orkestra start -p {other} ...`.")
 
 
-def run_guard(event: Dict[str, Any], cfg: Dict[str, Any], binding: Dict[str, Any], segs: List[sp.Segment]) -> Decision:
+def run_guard(event: Dict[str, Any], cfg: Dict[str, Any], binding: Dict[str, Any], segs: List[sp.Segment],
+              grants: Iterable[str] = ()) -> Decision:
     st = binding.get("state") or {}
     if st.get("status") not in ("active", "awaiting_user", "blocked", "paused"):
         return ALLOW
@@ -1551,6 +1595,11 @@ def run_guard(event: Dict[str, Any], cfg: Dict[str, Any], binding: Dict[str, Any
             if not recursive_targets:
                 return deny("destructive", "Recursive deletion with unknown targets is blocked; remove only exact planned files.")
             for target in recursive_targets:
+                # A variable assigned to one literal temp directory in this same command is that directory.
+                # Anything else keeps the unexpanded target, so an unknown variable stays a deny.
+                expanded = expand_literal_vars(target, full_cmd)
+                if expanded is not None and _classify(str(resolve_path(expanded, scwd)), project, fdir) == "temp":
+                    continue
                 resolved = str(resolve_path(target, scwd))
                 d = check_target(resolved, "bash:rm")
                 if d.denied:
@@ -1622,7 +1671,7 @@ def run_guard(event: Dict[str, Any], cfg: Dict[str, Any], binding: Dict[str, Any
         if d.denied:
             return d
     if guards.get("deploy", True):
-        d = deploy_guard(segs)
+        d = deploy_guard(segs, grants)
         if d.denied:
             return d
     if guards.get("deps", True):
@@ -1763,7 +1812,7 @@ def pre_tool_decision(event: Dict[str, Any], cfg: Dict[str, Any], binding: Optio
             return deny("internals", "Do not pre-fill `answers` in AskUserQuestion — only the user answers questions.")
         return ALLOW
     if binding:
-        d = run_guard(event, cfg, binding, segs)
+        d = run_guard(event, cfg, binding, segs, grants)
         if d.denied:
             return Decision(d.action, d.reason + "\n" + unblock_line(event, binding), d.guard)   # always a way out
     return ALLOW

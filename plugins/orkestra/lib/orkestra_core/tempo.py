@@ -26,7 +26,7 @@ from .workkind import kind_of
 # thresholds live in ~/.orkestra/config.json → "watchdog" (defaults: paths.DEFAULT_GLOBAL_CONFIG)
 WD_DEFAULTS: Dict[str, Any] = {"dead_wait_seconds": 90, "hung_command_seconds": 900, "gate_command_seconds": 1800,
                                "silent_seconds": 600, "user_wait_notify_seconds": 300, "loop_repeats": 3,
-                               "agent_max_minutes": 60, "agent_silent_seconds": 150}
+                               "agent_max_minutes": 60, "agent_silent_seconds": 150, "health_check_seconds": 120}
 MAX_REVIEW_ROUNDS = 3                    # the 3rd FAIL goes to the user (manual) / to defer or block (autopilot)
 MAX_DISPATCHES = 3                       # identical dispatches without new evidence before `next` escalates (tempo.max_dispatches)
 DUE_REPORT_SECONDS = 60                  # a stopped subagent's report that has not arrived after this long is a dead wait
@@ -712,6 +712,10 @@ def next_action(project: Path, st: Dict[str, Any], deep: bool = True, now: Optio
         elif rid not in read_text(paths.memory_dir(project) / "FEATURES.md"):
             act = _n("cli", f"`orkestra memory feature-add {p} --title \"…\" --summary \"…\" --capabilities \"…\"`",
                      "memory/FEATURES.md has no entry for this run")
+    if phase == "plan" and act and _plan_is_a_long_refusal(project, st, rid):
+        act["text"] = ("This plan phase is past 10 minutes and no product file has changed. If the outcome is a "
+                       "written refusal, finish it now: one task, Files: none, TDD: n/a, then `orkestra phase next`. "
+                       "Do not keep researching. ") + str(act.get("text") or "")
     if act is None:
         if phase == "done":
             return done(_n("none", "run complete"))
@@ -731,6 +735,19 @@ def next_action(project: Path, st: Dict[str, Any], deep: bool = True, now: Optio
             act = _n("cli", f"`orkestra phase next {p}` ({phase} → {target})", "this phase's outputs are complete",
                      f"orkestra phase next {p}")
     return done(act)
+
+
+def _plan_is_a_long_refusal(project: Path, st: Dict[str, Any], rid: str) -> bool:
+    """True when plan has already used 10 minutes and this run still has no product diff.
+
+    A real feature that is still being designed is unchanged by the hint. A written refusal should already be done.
+    """
+    hist = st.get("history") or []
+    opened = _ts(hist[-1].get("at")) if hist else None
+    if opened is None or time.time() - opened < 600:
+        return False
+    from . import snapshot as S
+    return not S.changed_files(project, paths.run_dir(project, rid))
 
 
 def next_lines(n: Dict[str, Any], flags: Optional[List[str]] = None) -> List[str]:

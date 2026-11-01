@@ -538,7 +538,7 @@ def clear_grant(session_id: str) -> None:
         pass
 
 
-def current_grant(session_id: str, prompt_id: Optional[str]) -> List[str]:
+def _prompt_grant(session_id: str, prompt_id: Optional[str]) -> List[str]:
     data = read_json(paths.grants_dir() / f"{_safe(session_id)}.json") if session_id else None
     if not isinstance(data, dict):
         return []
@@ -548,6 +548,52 @@ def current_grant(session_id: str, prompt_id: Optional[str]) -> List[str]:
     if time.time() - float(data.get("ts", 0)) < 1800:
         return list(data.get("categories") or [])
     return []
+
+
+def current_grant(session_id: str, prompt_id: Optional[str]) -> List[str]:
+    cats = _prompt_grant(session_id, prompt_id)
+    if session_id and owner_grant(session_id):
+        return sorted((set(cats) | set(OWNER_GRANTS)) - set(OWNER_DENIED))
+    return cats
+
+
+# ---------------------------------------------------------------- owner grants (Telegram owner command)
+# The bridge writes one for the headless session of a job the owner confirmed with their passphrase (checked by the
+# OpenClaw plugin, never by a model). It lasts the whole job, not one prompt: every turn refreshes it, the end of the
+# job removes it. What cannot be undone is refused even when the request's own words ask for it.
+
+OWNER_TTL = 12 * 3600.0
+OWNER_GRANTS = ("branch", "commit", "deploy", "gh_write", "pr", "push", "stash", "sync", "tag")
+OWNER_DENIED = ("amend", "discard", "force", "hard_reset")
+
+
+def _owner_file(session_id: str) -> Path:
+    return paths.grants_dir() / "owner" / f"{_safe(session_id)}.json"
+
+
+def write_owner_grant(session_id: str, job_id: str) -> None:
+    if not session_id:
+        return
+    write_json_atomic(_owner_file(session_id), {"job": job_id, "at": now_iso(), "ts": time.time()})
+    _prune(paths.grants_dir() / "owner", days=2)
+
+
+def clear_owner_grant(session_id: str) -> None:
+    if not session_id:
+        return
+    try:
+        _owner_file(session_id).unlink()
+    except FileNotFoundError:
+        pass
+
+
+def owner_grant(session_id: str) -> Optional[Dict[str, Any]]:
+    if not session_id:
+        return None
+    data = read_json(_owner_file(session_id))
+    if isinstance(data, dict) and 0 <= time.time() - float(data.get("ts") or 0) <= OWNER_TTL:
+        return data
+    return None
 
 
 # ---------------------------------------------------------------- stop requests (the dashboard's Pause / Abort)

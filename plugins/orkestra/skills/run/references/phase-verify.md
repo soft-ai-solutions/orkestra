@@ -3,7 +3,8 @@
 Goal: fresh proof that nothing that worked is broken and an honest, traceable outcome: `PASS` when every requirement is proven; `PASS_WITH_NOTES` only for explicitly deferred, non-passing evidence.
 
 1. `orkestra gate verify -p <project>`.
-   - REGRESSION → `orkestra phase back implement --reason "<gate> regressed"`, brief an implementer with the failing tail (fix the cause, never the test), then return here.
+   - When this run changed no product file and the baseline is green, verify reuses that baseline. It does not run the suite again.
+   - A product edit still runs the gates. REGRESSION → `orkestra phase back implement --reason "<gate> regressed"`, brief an implementer with the failing tail (fix the cause, never the test), then return here.
 2. Dispatch `orkestra:verifier` (project path + run folder). It reads the gate result with `orkestra gate last` (it does
    NOT re-run the full suite), runs only narrow tests it needs as evidence, and writes `verification.md` ending in `VERDICT: …`.
    End your turn after dispatching; its report resumes you.

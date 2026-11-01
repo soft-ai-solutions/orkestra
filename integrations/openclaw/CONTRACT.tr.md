@@ -98,6 +98,34 @@ ile cevaplanan bildirimler olarak döner. Ajan bir çalışmanın sorusunu asla 
 `openclaw.plugin.json` içinde (`contracts.tools`) bildirilir; sınırlı bir araç profili (ör. `coding`) onları modele
 yalnızca `tools.alsoAllow` içindeyse sunar.
 
+## Sahip komutları (parola)
+
+Sahibin sohbetinden gelen ve sahibin parolasını içeren mesajı eklentinin kendisi işler; mesaj ajana ve onun kayıtlarına
+hiç ulaşmaz. Yapılandırmada yalnızca `ownerCommand: {salt, sha256, words}` durur: `salt + "\n" + küçük harfli ASCII harf
+ve rakamlara katlanmış, boşlukları atılmış parola` metninin onaltılık SHA-256 özeti (`logic.js` `ownerPhraseDigest`).
+Böylece "Fırat Kocabay emrediyor!" ile "firatkocabay emrediyor" aynı paroladır. Eklenti sonra:
+
+1. bridge kapalıysa açar (`orkestra_client.py ensure`: `com.orkestra.bridge` için `-k` olmadan `launchctl kickstart`,
+   olmazsa `bootstrap`, o da yoksa ayrık bir `serve`);
+2. projeyi mesajdan okur (boşluklu ya da Türkçe ekli klasör adları); hiçbiri ya da birden fazlası eşleşirse bir kez
+   sorar, soruda `[owner <kod>]` bulunur ve harfle ya da klasör adıyla verilen Yanıt işi başlatır (30 dakika geçerli,
+   parolayı yeniden yazmak gerekmez);
+3. işi `owner: true` ile başlatır (`POST /jobs`, yalnız `source` `openclaw` ya da `cli` ise kabul edilir). Bridge işi
+   claude motorunda `owner_model` / `owner_fallback_model` / `owner_effort` (varsayılan `fable`, `opus`, `xhigh`) ile,
+   autopilot'ta, en çok `owner_max_auto_resumes` (8) otomatik devamla çalıştırır ve işin oturumu için bir sahip izni
+   yazar (`~/.orkestra/grants/owner/<oturum>.json`; her turda yenilenir, iş bitince ya da iptal edilince silinir, en
+   çok 12 saat).
+
+Sahip izniyle kancalar commit, push, branch, PR, tag, merge/rebase/pull, stash, GitHub yazma ve deploy ya da yayın
+komutlarına izin verir. Geri alınamayan şeyler istekte açıkça yazsa bile reddedilmeye devam eder: force push, amend,
+hard reset ya da `git clean`, değişiklikleri atmak, geçici klasör dışında özyinelemeli silme ve silen ya da düşüren uzak
+işlemler (`destroy`, `delete`, `rm`, `reset`, `down`, `drop`, `truncate`, rsync `--delete`, şema push'ları vb.), ayrıca
+gizli dosyalar ve EAS bulut derlemeleri. `/yap`'taki açık çalışma kuralı da geçerlidir.
+
+`/ide` ya da kısa bir "ide ayaklandır" mesajı `orkestra_client.py revive` çalıştırır: bridge, dashboard
+(127.0.0.1:47616) ve `ideApps` içindeki uygulamalar (varsayılan `["Cursor"]`) kontrol edilir, kapalı olan başlatılır ve
+yanıt her birinin durumunu listeler.
+
 ## Garantiler
 
 - Headless run'lar etkileşimli olanla aynı guard'lardan geçer: commit/push/deploy yok, sırlar okunmaz; autopilot varsayılandır, manual plan onayı yalnız gerçek kullanıcı mesajıyla kaydedilir.

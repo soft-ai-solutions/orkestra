@@ -100,6 +100,35 @@ and the job's questions come back as notifications answered with Reply. The agen
 The tools are declared in `openclaw.plugin.json` (`contracts.tools`); a limited tool profile (for example `coding`)
 offers them to the model only when they are in `tools.alsoAllow`.
 
+## Owner commands (passphrase)
+
+A message from the owner's chat that contains the owner's passphrase is handled by the plugin itself and never reaches
+the agent or its transcript. The config holds only `ownerCommand: {salt, sha256, words}`: the hex SHA-256 of
+`salt + "\n" + the phrase folded to lower-case ASCII letters and digits, spaces removed`
+(`logic.js` `ownerPhraseDigest`), so capitals, Turkish letters, spaces and punctuation do not matter. The
+plugin then:
+
+1. starts the bridge when it is down (`orkestra_client.py ensure`: `launchctl kickstart` of `com.orkestra.bridge`
+   without `-k`, then `bootstrap`, else a detached `serve`);
+2. reads the project from the message (folder names with spaces or Turkish suffixes); when none or several match it
+   asks once, with `[owner <code>]` in the question, and a Reply with the letter or the folder name starts the job
+   (valid 30 minutes, no passphrase needed again);
+3. starts the job with `owner: true` (`POST /jobs`, accepted only from `source` `openclaw` or `cli`). The bridge runs it
+   on the claude engine with `owner_model` / `owner_fallback_model` / `owner_effort` (default `fable`, `opus`,
+   `xhigh`), autopilot, up to `owner_max_auto_resumes` (8) automatic continuations, and writes an owner grant for the
+   job's session (`~/.orkestra/grants/owner/<session>.json`, renewed every turn, removed when the job ends or is
+   cancelled, 12 h at most).
+
+With the owner grant the hooks allow commit, push, branch, PR, tag, merge/rebase/pull, stash, GitHub writes and deploy
+or release commands. What cannot be undone stays refused even when the request asks for it: force push, amend, hard
+reset or `git clean`, discarding changes, recursive deletes outside a temporary folder, and remote actions that delete
+or drop (`destroy`, `delete`, `rm`, `reset`, `down`, `drop`, `truncate`, rsync `--delete`, schema pushes and the like),
+as well as secret files and EAS cloud builds. The open-run rule of `/run` applies too.
+
+`/ide` or a short message such as "restart the ide" (Turkish wording works too) runs `orkestra_client.py revive`: the bridge, the dashboard
+(127.0.0.1:47616) and the apps in `ideApps` (default `["Cursor"]`) are checked and started when they are down, and the
+answer lists each one.
+
 ## Guarantees
 
 - Headless runs pass through the same guards as interactive ones: no commit, push or deploy, secrets are never read;

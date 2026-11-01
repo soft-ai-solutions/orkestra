@@ -403,6 +403,7 @@ class TestPage(helpers.Sandbox):
         return out
 
     PAUSE = "const b=H.find(H.byId('main'),n=>n.dataset&&n.dataset.act==='ctl'&&n.dataset.action==='pause')[0];b.fire('click');"
+    SURE = "H.byId('ctl-sure').checked=true;H.byId('ctl-sure').fire('change');"
 
     def test_an_open_run_has_pause_and_abort_a_closed_one_has_none(self):
         views = [risky_view(1), view(2, "done", "done", status="done")]
@@ -428,14 +429,18 @@ class TestPage(helpers.Sandbox):
     def test_pause_asks_first_then_sends_the_token_and_reports_the_result(self):
         out = self.run_page([risky_view(1)], [
             ev(self.PAUSE + "const d=H.byId('ctl');return [d.getAttribute('open'),H.byId('ctl-h').textContent,"
-                            "H.byId('ctl-ok').textContent,H.byId('ctl-run').textContent,H.sc.posts.length]", "open"),
-            ev("H.byId('ctl-reason').value='  wrong   way ';H.byId('ctl-form').fire('submit');return H.byId('ctl-ok').textContent", "busy"),
+                            "H.byId('ctl-ok').textContent,H.byId('ctl-ok').disabled,H.byId('ctl-project').textContent,"
+                            "H.byId('ctl-job').textContent,H.byId('ctl-sure-l').textContent,H.sc.posts.length]", "open"),
+            ev("H.byId('ctl-form').fire('submit');return [H.sc.posts.length,H.byId('ctl-err').textContent]", "held"),
+            ev(self.SURE + "H.byId('ctl-reason').value='  wrong   way ';H.byId('ctl-form').fire('submit');return H.byId('ctl-ok').textContent", "busy"),
             {"op": "advance", "ms": 50},
             ev("const p=H.sc.posts[0];return [p.url,p.headers['X-Orkestra-Token'],p.headers['Content-Type'],p.body.key,"
                "p.body.action,p.body.reason,p.body.lang,H.byId('ctl').getAttribute('open'),H.byId('toast').textContent,"
                "H.byId('toast').hidden,H.sc.calls.length>1]", "sent")])
         r = out["results"]
-        self.assertEqual(r["open"], ["", "Pause this run?", "Pause run", "proj1 · run-1 · Title 1", 0])
+        self.assertEqual(r["open"], ["", "Pause this run?", "Pause run", True, "proj1", "Title 1",
+                                     "I am sure. Pause this run.", 0])
+        self.assertEqual(r["held"], [0, "Tick the confirmation. Pause and Abort do not run from the first click."])
         self.assertEqual(r["busy"], "Pausing…")
         self.assertEqual(r["sent"], ["/api/control", "tok-9", "application/json", "k1", "pause", "wrong way", "en", None,
                                      "proj1 run-1 is paused. Sessions told to stop: 1.", False, True])
@@ -443,11 +448,11 @@ class TestPage(helpers.Sandbox):
     def test_a_refused_request_keeps_the_dialog_open_with_the_reason_under_it(self):
         out = self.run_page([risky_view(1)], [
             {"op": "set", "key": "control", "value": {"ok": False, "error": "token"}}, {"op": "set", "key": "controlStatus", "value": 403},
-            ev(self.PAUSE + "H.byId('ctl-form').fire('submit');return 1", "x"), {"op": "advance", "ms": 50},
+            ev(self.PAUSE + self.SURE + "H.byId('ctl-form').fire('submit');return 1", "x"), {"op": "advance", "ms": 50},
             ev("return [H.byId('ctl').getAttribute('open'),H.byId('ctl-err').hidden,H.byId('ctl-err').textContent,"
                "H.byId('ctl-ok').textContent,H.byId('ctl-ok').disabled]", "err"),
             {"op": "set", "key": "controlFail", "value": True},
-            ev("H.byId('ctl-form').fire('submit');return 1", "y"), {"op": "advance", "ms": 50},
+            ev(self.SURE + "H.byId('ctl-form').fire('submit');return 1", "y"), {"op": "advance", "ms": 50},
             ev("return H.byId('ctl-err').textContent", "net")])
         r = out["results"]
         self.assertEqual(r["err"][:2], ["", False])

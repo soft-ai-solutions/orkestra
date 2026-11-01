@@ -97,7 +97,7 @@ const lang = (code) => {
 test("every command exists under its English and its Turkish name, with the same rules", () => {
   lang("en");
   const { commands } = harness();
-  assert.deepEqual(Object.keys(commands).sort(), ["cancel", "durum", "iptal", "run", "runs", "yap"]);
+  assert.deepEqual(Object.keys(commands).sort(), ["cancel", "durum", "ide", "iptal", "run", "runs", "yap"]);
   for (const def of Object.values(commands)) {
     assert.equal(def.requireAuth, true);
     assert.deepEqual(def.channels, ["telegram"]);
@@ -129,7 +129,7 @@ test("command descriptions follow the language at registration", () => {
 test("a name the host reserves is skipped with a warning; the rest still registers", () => {
   lang("en");
   const { commands, warnings } = harness({}, { failRegister: ["runs"] });
-  assert.deepEqual(Object.keys(commands).sort(), ["cancel", "durum", "iptal", "run", "yap"]);
+  assert.deepEqual(Object.keys(commands).sort(), ["cancel", "durum", "ide", "iptal", "run", "yap"]);
   assert.equal(warnings.length, 1);
   assert.match(warnings[0], /\/runs not registered/);
 });
@@ -391,4 +391,129 @@ test("a host without registerTool still gets every command", () => {
     registerCommand: () => {}, on: () => {}, registerService: () => {},
   };
   assert.doesNotThrow(() => plugin.register(api));
+});
+
+// ---------------------------------------------------------------- owner command and revive
+import { ownerPhraseDigest } from "./logic.js";
+
+const OWNER = ownerPhraseDigest("salt-for-tests-1234", "open sesame now");
+const OWNER_PROJECTS = { projects: [{ name: "namaz-vakitleri" }, { name: "pomi" }, { name: "tinko" }] };
+const dm = (content, extra = {}) => ({ channel: "telegram", senderId: CHAT, content, ...extra });
+
+function ownerHarness(extra = {}) {
+  const script = {
+    ensure: () => ok({ state: "running" }),
+    projects: () => ok(OWNER_PROJECTS),
+    start: (argv) => ok({ id: JOB, project: argv[3], owner: argv.includes("--owner") }),
+    ...extra,
+  };
+  return harness(script, { config: { ownerCommand: OWNER } });
+}
+
+test("an owner command starts an owner job in the project the message names, and never reaches the agent", async () => {
+  lang("tr");
+  const { hooks, calls } = ownerHarness();
+  const res = await hooks.before_dispatch(dm("Open Sesame now: namaz vakitlerinde bildirim sesini düzelt ve yayınla"), {});
+  assert.equal(res.handled, true);
+  assert.match(res.text, /Sahip komutu başladı: \[namaz-vakitleri\] iş 0123456789ab/);
+  const start = calls.find((a) => a[2] === "start");
+  assert.ok(start.includes("--owner"));
+  assert.equal(start[3], "namaz-vakitleri");
+  assert.equal(start[4], "namaz vakitlerinde bildirim sesini düzelt ve yayınla");   // the passphrase is gone
+  assert.ok(!calls.flat().join(" ").toLowerCase().includes("sesame"));
+  assert.ok(calls.findIndex((a) => a[2] === "ensure") < calls.findIndex((a) => a[2] === "start"));   // Orkestra first
+});
+
+test("without the passphrase nothing changes: the message goes to the agent", async () => {
+  const { hooks, calls } = ownerHarness();
+  assert.equal(await hooks.before_dispatch(dm("namaz vakitlerinde bildirim sesini düzelt"), {}), undefined);
+  assert.equal(calls.length, 0);
+  assert.equal(await hooks.before_dispatch(dm("open sesame now: pomi", { senderId: "999" }), {}), undefined);
+});
+
+test("an unclear project is asked once; the Reply with a letter starts the owner job without the passphrase", async () => {
+  lang("en");
+  const { hooks, calls } = ownerHarness();
+  const ask = await hooks.before_dispatch(dm("open sesame now make tinko look like pomi"), {});
+  assert.equal(ask.handled, true);
+  assert.match(ask.text, /a\) tinko\nb\) pomi/);
+  const code = /\[owner ([a-f0-9]{8})\]/.exec(ask.text)[1];
+  const res = await hooks.before_dispatch(dm("b", { replyToBody: ask.text }), {});
+  assert.match(res.text, /Owner command started: \[pomi\] job/);
+  const start = calls.find((a) => a[2] === "start");
+  assert.deepEqual([start[3], start[4], start.includes("--owner")], ["pomi", "make tinko look like pomi", true]);
+  const again = await hooks.before_dispatch(dm("a", { replyToBody: ask.text }), {});
+  assert.match(again.text, /older than 30 minutes or unknown/);                       // one start per command
+  assert.ok(code);
+});
+
+test("no project in the message: the question lists the folders and a typed name answers it", async () => {
+  lang("en");
+  const { hooks, calls } = ownerHarness();
+  const ask = await hooks.before_dispatch(dm("open sesame now update the readme"), {});
+  assert.match(ask.text, /Projects: namaz-vakitleri, pomi, tinko/);
+  const res = await hooks.before_dispatch(dm("Namaz Vakitleri", { replyToBody: ask.text }), {});
+  assert.match(res.text, /\[namaz-vakitleri\]/);
+  assert.equal(calls.filter((a) => a[2] === "start").length, 1);
+});
+
+test("an owner command without a task, or with Orkestra down, says so and starts nothing", async () => {
+  lang("en");
+  let h = ownerHarness();
+  assert.match((await h.hooks.before_dispatch(dm("open sesame now!"), {})).text, /no task next to it/);
+  h = ownerHarness({ ensure: () => bad("launchd said no") });
+  const res = await h.hooks.before_dispatch(dm("open sesame now fix pomi"), {});
+  assert.match(res.text, /could not be started \(launchd said no\)/);
+  assert.equal(h.calls.filter((a) => a[2] === "start").length, 0);
+});
+
+test("an owner command keeps the no-takeover rule of /run", async () => {
+  lang("en");
+  const { hooks, calls } = harness({
+    ensure: () => ok({ state: "running" }),
+    projects: () => ok(OWNER_PROJECTS),
+    watch: () => ok([{ project_name: "pomi", status: "active", title: "other work", phase: "implement" }]),
+  }, { config: { ownerCommand: OWNER } });
+  const res = await hooks.before_dispatch(dm("open sesame now fix pomi"), {});
+  assert.match(res.text, /already has an open Orkestra run/);
+  assert.equal(calls.filter((a) => a[2] === "start").length, 0);
+});
+
+test("a reply to a job with the passphrase forwards the text without it", async () => {
+  lang("en");
+  const { hooks, calls } = ownerHarness({ reply: () => ok({ ok: true }) });
+  await hooks.before_dispatch(dm("open sesame now: use the blue one", { replyToBody: `[pomi] ⛔ Blocked · implement · job ${JOB}` }), {});
+  const reply = calls.find((a) => a[2] === "reply");
+  assert.deepEqual(reply.slice(3), [JOB, "use the blue one"]);
+});
+
+test("an invalid ownerCommand config turns owner commands off with a warning", async () => {
+  const { hooks, warnings } = harness({}, { config: { ownerCommand: { salt: "short", sha256: "x", words: 2 } } });
+  assert.ok(warnings.some((w) => /ownerCommand is invalid/.test(w)));
+  assert.equal(await hooks.before_dispatch(dm("open sesame now fix pomi"), {}), undefined);
+});
+
+test("/ide and a short 'ide ayaklandır' bring the tools back and report each one", async () => {
+  lang("tr");
+  const revive = (argv) => Promise.resolve({
+    code: 1,
+    stdout: JSON.stringify({ bridge: { state: "running" }, dashboard: { state: "started" },
+      apps: [{ app: argv[4], state: "failed" }], ok: false }),
+    stderr: "",
+  });
+  const { commands, hooks, calls } = harness({ revive });
+  const viaText = await hooks.before_dispatch(dm("IDE'yi ayaklandır"), {});
+  assert.equal(viaText.handled, true);
+  assert.match(viaText.text, /✅ Orkestra bridge: zaten çalışıyor\n✅ Orkestra dashboard: başlatıldı\n⚠️ Cursor: başlatılamadı/);
+  assert.deepEqual(calls[0].slice(2), ["revive", "--app", "Cursor"]);
+  const viaCommand = await commands.ide.handler({});
+  assert.match(viaCommand.text, /Araçlar ayağa kaldırılıyor/);
+  assert.equal(await hooks.before_dispatch(dm("namaz vakitleri projesinde ide ayarlarını düzelt lütfen bugün"), {}), undefined);
+});
+
+test("ideApps in the config chooses the apps", async () => {
+  const { commands, calls } = harness({ revive: () => ok({ bridge: { state: "running" }, dashboard: { state: "running" }, apps: [] }) },
+    { config: { ideApps: ["Visual Studio Code", "Cursor"] } });
+  await commands.ide.handler({});
+  assert.deepEqual(calls[0].slice(2), ["revive", "--app", "Visual Studio Code", "--app", "Cursor"]);
 });

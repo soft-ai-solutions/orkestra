@@ -9,6 +9,9 @@
     orkestra_client.py cancel --chat-id ID                  # stop the latest open job of that chat
     orkestra_client.py runs [--json]                        # live view: every open run, its phase, what it does now
     orkestra_client.py projects                             # project folders the bridge may start (allowlist applied)
+    orkestra_client.py start ... --owner                    # owner command (the OpenClaw plugin checked the passphrase)
+    orkestra_client.py ensure                               # start the bridge when it is not running
+    orkestra_client.py revive [--app NAME]...               # bring back the bridge, the dashboard and the IDE apps
 
 Reads the bearer token from ~/.orkestra/bridge.secret.json (same machine). Prints JSON (or the message for `wait`).
 Exit codes: 0 ok · 1 bridge/HTTP error · 2 usage.
@@ -20,7 +23,9 @@ from __future__ import annotations
 import errno
 import json
 import os
+import re
 import socket
+import subprocess
 import sys
 import time
 import urllib.error
@@ -87,6 +92,109 @@ def _call(method: str, path: str, body: Optional[Dict[str, Any]] = None) -> Tupl
     return 0, {"error": "unreachable"}            # not reached: the loop always returns
 
 
+# ---------------------------------------------------------------- bringing the tools back (`ensure`, `revive`)
+# Started from the OpenClaw gateway (Telegram /ide, an owner command while the bridge is down). Children
+# are fully detached (own session, no inherited pipes): the caller's command runner must not wait for them.
+
+LAUNCHD_LABEL = "com.orkestra.bridge"
+DASHBOARD_PORT = 47616
+ORKESTRA_BIN = HERE.parent / "plugins" / "orkestra" / "bin" / "orkestra"
+APP_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,59}$")
+
+
+def _run(argv: List[str], timeout: float = 20) -> int:
+    try:
+        return subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                              timeout=timeout).returncode
+    except (OSError, subprocess.SubprocessError):
+        return 127
+
+
+def _port_open(host: str, port: int) -> bool:
+    try:
+        with socket.create_connection((host, int(port)), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
+def _spawn(argv: List[str], log_name: str) -> None:
+    logs = HOME / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    with open(logs / log_name, "ab") as out:
+        subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=out, start_new_session=True,
+                         cwd=str(HERE.parent), close_fds=True)
+
+
+def _wait_port(host: str, port: int, seconds: float) -> bool:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if _port_open(host, port):
+            return True
+        time.sleep(0.4)
+    return _port_open(host, port)
+
+
+def ensure_bridge(wait: float = 25.0) -> Dict[str, Any]:
+    cfg = _cfg()
+    host, port = str(cfg.get("host") or "127.0.0.1"), int(cfg.get("port") or 47615)
+    if _port_open(host, port):
+        return {"state": "running", "port": port}
+    how = "process"
+    if sys.platform == "darwin":
+        target = f"gui/{os.getuid()}/{LAUNCHD_LABEL}"
+        plist = Path.home() / "Library" / "LaunchAgents" / f"{LAUNCHD_LABEL}.plist"
+        if _run(["launchctl", "kickstart", target]) == 0:
+            how = "launchd"
+        elif plist.exists() and _run(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(plist)]) == 0:
+            _run(["launchctl", "kickstart", target])
+            how = "launchd"
+    if how == "process":
+        _spawn([sys.executable, str(HERE / "orkestra_bridge.py"), "serve"], "bridge.out")
+    if _wait_port(host, port, wait):
+        return {"state": "started", "port": port, "how": how}
+    return {"state": "failed", "port": port, "how": how,
+            "error": t("bridge.client.unreachable", reason="no answer after start", script=HERE / "orkestra_bridge.py")}
+
+
+def ensure_dashboard(wait: float = 15.0) -> Dict[str, Any]:
+    if _port_open("127.0.0.1", DASHBOARD_PORT):
+        return {"state": "running", "port": DASHBOARD_PORT}
+    _spawn([sys.executable, str(ORKESTRA_BIN), "dashboard", "--port", str(DASHBOARD_PORT)], "dashboard.out")
+    return {"state": "started" if _wait_port("127.0.0.1", DASHBOARD_PORT, wait) else "failed", "port": DASHBOARD_PORT}
+
+
+def _app_running(bundle: Path) -> bool:
+    """Whether the app's main executable runs (`ps`: `pgrep -f` misses some signed apps' arguments on macOS)."""
+    try:
+        out = subprocess.run(["ps", "-axo", "comm="], capture_output=True, text=True, timeout=20).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    prefix = f"{bundle}/Contents/MacOS/"
+    return any(line.strip().startswith(prefix) for line in out.splitlines())
+
+
+def ensure_app(name: str) -> Dict[str, Any]:
+    if not APP_NAME.match(name):
+        return {"app": name, "state": "invalid"}
+    if sys.platform != "darwin":
+        return {"app": name, "state": "unsupported"}
+    bundle = next((d / f"{name}.app" for d in (Path("/Applications"), Path.home() / "Applications")
+                   if (d / f"{name}.app").is_dir()), None)
+    if bundle is None:
+        return {"app": name, "state": "missing"}
+    if _app_running(bundle):
+        return {"app": name, "state": "running"}
+    return {"app": name, "state": "started" if _run(["open", "-a", str(bundle)]) == 0 else "failed"}
+
+
+def revive(apps: List[str]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {"bridge": ensure_bridge(), "dashboard": ensure_dashboard(),
+                           "apps": [ensure_app(a) for a in apps]}
+    out["ok"] = all(x["state"] in ("running", "started") for x in [out["bridge"], out["dashboard"], *out["apps"]])
+    return out
+
+
 def _opt(args: List[str], name: str, default: Optional[str] = None) -> Tuple[Optional[str], List[str]]:
     if name in args:
         i = args.index(name)
@@ -115,6 +223,8 @@ def main(argv: List[str]) -> int:
     chat, args = _opt(args, "--chat-id")
     source, args = _opt(args, "--source", "cli")
     timeout, args = _opt(args, "--timeout", "1800")
+    owner = "--owner" in args
+    args = [a for a in args if a != "--owner"] if cmd == "start" else args
     if cmd == "start":
         if len(args) < 2:
             print(t("bridge.client.help"))
@@ -122,7 +232,21 @@ def main(argv: List[str]) -> int:
         request = {"project": args[0], "request": " ".join(args[1:]), "chat_id": chat, "source": source}
         if engine:
             request["engine"] = engine
+        if owner:
+            request["owner"] = True
         code, body = _call("POST", "/jobs", request)
+    elif cmd == "ensure":
+        body = ensure_bridge()
+        code = 200 if body["state"] in ("running", "started") else 503
+    elif cmd == "revive":
+        apps: List[str] = []
+        while "--app" in args:
+            i = args.index("--app")
+            if i + 1 < len(args):
+                apps.append(args[i + 1])
+            del args[i:i + 2]
+        body = revive(apps)
+        code = 200 if body["ok"] else 503
     elif cmd == "reply":
         if chat:
             code, body = _call("POST", "/reply", {"chat_id": chat, "text": " ".join(args)})

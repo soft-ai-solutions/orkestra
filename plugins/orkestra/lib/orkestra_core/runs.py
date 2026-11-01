@@ -345,6 +345,12 @@ def _legacy_plan_review_is_current(project: Path, st: Dict[str, Any]) -> bool:
         return False
 
 
+def unfinished_task_ids(st: Dict[str, Any]) -> List[str]:
+    """Task ids that are not done. Deferred is unfinished: the run is not production-ready while one remains."""
+    tasks = st.get("tasks") or {}
+    return sorted(tid for tid, t in tasks.items() if isinstance(t, dict) and t.get("status") != "done")
+
+
 def preconditions(project: Path, st: Dict[str, Any], target: str) -> List[str]:
     rid = st["run_id"]
     fdir = paths.feature_dir(project, rid)
@@ -440,9 +446,9 @@ def preconditions(project: Path, st: Dict[str, Any], target: str) -> List[str]:
         problems += E.integrity_problems(project, rid, changed)
         problems += deps_problems(project, st)
     elif target == "deliver":
-        open_tasks = [tid for tid, t in st.get("tasks", {}).items() if t.get("status") not in ("done", "deferred")]
-        if open_tasks:
-            problems.append(f"tasks not done (incl. review fixes): {', '.join(sorted(open_tasks))}")
+        left = unfinished_task_ids(st)
+        if left:
+            problems.append("tasks not done (incl. review fixes; a deferred task is not finished): " + ", ".join(left))
         tri = read_text(fdir / "reviews" / "triage.md")
         if not tri.strip():
             problems.append("reviews/triage.md missing (every review finding needs a verdict: fix/defer/reject)")
@@ -457,9 +463,15 @@ def preconditions(project: Path, st: Dict[str, Any], target: str) -> List[str]:
         elif isinstance(last, dict) and not (last.get("comparison") or {}).get("ok"):
             problems.append("last gate verify is not green")
         elif isinstance(last, dict) and any(r.get("carried_from") for r in last.get("results") or []):
-            problems.append("the last gate verify carried gates forward: run `orkestra gate verify --all` once so the "
-                            "final proof covers every gate")
+            carried = [r for r in (last.get("results") or []) if r.get("carried_from")]
+            # An empty product diff may keep the baseline. A carry after a real edit still needs one full run.
+            if not (carried and all(r.get("unchanged_tree") for r in carried) and not S.changed_files(project, rdir)):
+                problems.append("the last gate verify carried gates forward: run `orkestra gate verify --all` once so the "
+                                "final proof covers every gate")
     elif target == "done":
+        left = unfinished_task_ids(st)
+        if left:
+            problems.append("tasks not done (a deferred task is not production-ready): " + ", ".join(left))
         rep = read_text(fdir / "report.md")
         if len(rep.strip()) < 300:
             problems.append("report.md missing or too short")
@@ -1224,6 +1236,19 @@ def gates_verify(project: Path, run_id: str, resume: bool = False, full: bool = 
     gates = [g for g in (cfg.get("gates") or []) if g.get("enabled") is not False]
     files = _file_sigs(project, S.changed_files(project, rdir))
     stamp = _stamp_of(files)
+    # A written refusal changes no product file. The baseline already ran the suite. Re-running it only
+    # spends the hour again. A later product edit leaves this path and runs the gates.
+    if not full and not files and gates and base:
+        names = [g.get("name") for g in gates]
+        rows = [bmap[n] for n in names if n in bmap]
+        if len(rows) == len(names) and all(r.get("ok") and not r.get("timed_out") for r in rows):
+            results = [dict(r, carried_from="baseline", unchanged_tree=True, duration_s=0, at=now_iso()) for r in rows]
+            comparison = G.compare(base, results)
+            G.save_results(rdir / "gates-verify.json", results, {"comparison": comparison, "ts": time.time(),
+                                                                 "label": label, "stamp": stamp, "files": files,
+                                                                 "unchanged_tree": True})
+            ledger(project, run_id, f"gate verify: NO REGRESSIONS {comparison} · unchanged tree, baseline stands")
+            return comparison, G.format_results(results, comparison, base)
     part = rdir / "gates-verify.partial.json"
     reuse: Dict[str, Dict[str, Any]] = {}
     if resume and not full:                         # results of an interrupted verify, only for the same tree state
@@ -1263,8 +1288,8 @@ def gates_verify(project: Path, run_id: str, resume: bool = False, full: bool = 
             dirty = any(G.glob_match(str(pt), f) for f in set(files) | set(lfiles) if files.get(f) != lfiles.get(f)
                         for pt in pats)
             if not dirty:
-                reuse[name] = dict(prev_r, carried_from=prev_r.get("carried_from") or last.get("label") or last.get("at"),
-                                   at=now_iso())
+                reuse[name] = dict(prev_r, carried_from=last.get("label") or last.get("at"),
+                                   unchanged_tree=False, at=now_iso())
         run_list.append(g)
 
     def keep(rs: List[Dict[str, Any]]) -> None:

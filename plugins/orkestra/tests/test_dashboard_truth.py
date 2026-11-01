@@ -20,6 +20,7 @@ import json
 import re
 import time
 import unittest
+from unittest import mock
 
 import helpers  # noqa: F401  (pins the language and the import path)
 from dash_support import HAVE_NODE
@@ -120,8 +121,8 @@ SCENARIOS = [
      ["7 dk hareket yok", "Çalışma kaydı 1 dk önce değişti."], False),
     ("session-left-not-waiting", dict(phase="clarify", updated_ago=900,
                                       rows=[r(200, "idle", what="turn ended · this turn did not drive the bound run → session unbound")]),
-     ("stalled", "detached"), False, ["Session left the run", "no session is bound to it now"],
-     ["Oturum çalışmadan ayrıldı", "ona bağlı bir oturum yok"], True),
+     ("stalled", "detached"), False, ["No session visible yet", "not proof the run stopped"],
+     ["Bağlı oturum henüz görünmüyor", "çalışmanın durduğu anlamına gelmez"], True),
     ("unknown-idle-text-no-claim", dict(phase="clarify", updated_ago=900, rows=[r(200, "idle", what="something else")]),
      ("running", "quiet"), False, ["Phase clarification"], ["Bu fazda (netleştirme)"], False),
     ("clarify-quiet-one-minute-no-rows", dict(phase="clarify", updated_ago=100), ("running", "quiet"), False,
@@ -145,8 +146,8 @@ SCENARIOS = [
                        rows=[r(900, "tool", tool="Agent", what="-> orkestra:reviewer: T016"),
                              r(899, "result", tool="Agent", what="<- orkestra:reviewer: async_launched"),
                              r(300, "agent_done", agent="orkestra:reviewer", what="reviewer done")]),
-     ("stalled", "dead_wait"), False, ["Report overdue", "its report has not reached the main session"],
-     ["Rapor gecikti", "raporu henüz ana oturuma ulaşmadı"], True),
+     ("stalled", "dead_wait"), False, ["Report not in yet", "its report has not reached the main session"],
+     ["Rapor henüz yok", "raporu henüz ana oturuma ulaşmadı"], True),
     # ---- closed: finished says finished, with when
     ("done", dict(status="done", phase="done", updated_ago=3600, rows=[r(3700, "tool", tool="Bash", what="ls")]),
      ("done", "done"), False, ["Finished", "Finished 1h ago."], ["Bitti", "1 sa önce bitti."], False),
@@ -494,6 +495,20 @@ class TestTruthReview(Truth):
         self.assertEqual((a["group"], a["code"]), ("stalled", "detached"))
         self.assertNotIn("thinking", a["what"])
         self.assertIn("orkestra", a["command"])
+
+    def test_a_fresh_unbind_is_not_called_a_left_session(self):
+        v = self.run_("left-fresh", "en", updated_ago=900,
+                      rows=[r(40, "idle", what="turn ended · this turn did not drive the bound run → session unbound")])
+        a = v["attention"]
+        self.assertNotEqual(a["code"], "detached", a)
+        self.assertNotIn("left the run", a["head"] + a["what"])
+
+    def test_a_live_driver_is_not_called_detached(self):
+        self.make_run("p-left-live", "r-left-live", updated_ago=900,
+                      rows=[r(400, "idle", what="turn ended · this turn did not drive the bound run → session unbound")])
+        with mock.patch.object(MON, "driver_born_at", return_value=time.time() - 30):
+            v = self.verdict("en", "r-left-live")
+        self.assertNotEqual(v["attention"]["code"], "detached", v["attention"])
 
     def test_a_fresh_session_bound_after_the_unbind_cancels_the_detached_verdict(self):
         self.make_run("p-left2", "r-left2", updated_ago=900,

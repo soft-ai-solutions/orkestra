@@ -202,6 +202,83 @@ class TestAttention(MonitorBase):
                                       [row(1, "tool", tool="Read", what="x")], NOW, NOW - 700, 0)
             self.assertEqual((headless["command"], headless["where"]), ('orkestra resume -p "demo" --run r1', "terminal"))
 
+    def test_the_silence_badge_follows_the_newest_feature_file(self):
+        """A plan written later than the tool log is life. The corner must not keep counting from the run start."""
+        proj = self.make_run("shop", "run-quiet", updated_ago=4000, history_ago=4000,
+                             rows=[self.ago_row(4000, "tool", tool="Read", what="old")])
+        plan = proj / ".orkestra" / "features" / "run-quiet" / "plan.md"
+        plan.write_text("plan\n", encoding="utf-8")
+        now = time.time()
+        os.utime(plan, (now - 120, now - 120))
+        st = json.loads((proj / ".orkestra" / "runs" / "run-quiet" / "state.json").read_text(encoding="utf-8"))
+        stall = {"cls": 4, "key": "silent", "since": 4000, "text": "silent"}
+        with lang("tr"):
+            a = MON._attention(st, {"level": "stale"}, stall, [], proj,
+                               [{"ts": now - 4000, "kind": "tool", "agent": "main", "tool": "Read", "what": "old"}],
+                               now, now - 4000, 4000)
+        self.assertEqual(a["code"], "silent")
+        self.assertGreaterEqual(a["since"], 100)
+        self.assertLess(a["since"], 180)
+        self.assertIn("2 dk", a["what"])
+        self.assertNotIn("1 sa", a["what"])
+
+    def test_a_live_driver_does_not_inherit_old_silence(self):
+        """The corner clock is the current process, not the age of files left by the previous one."""
+        proj = self.make_run("shop", "run-restart", updated_ago=4000, history_ago=4000,
+                             rows=[self.ago_row(4000, "tool", tool="Read", what="old")])
+        plan = proj / ".orkestra" / "features" / "run-restart" / "plan.md"
+        plan.write_text("plan\n", encoding="utf-8")
+        now = time.time()
+        os.utime(plan, (now - 4000, now - 4000))
+        st = json.loads((proj / ".orkestra" / "runs" / "run-restart" / "state.json").read_text(encoding="utf-8"))
+        stall = {"cls": 4, "key": "silent", "since": 4000, "text": "silent"}
+        rows = [{"ts": now - 4000, "kind": "tool", "agent": "main", "tool": "Read", "what": "old"}]
+        with lang("tr"):
+            young = MON._attention(st, {"level": "stale"}, stall, [], proj, rows, now, now - 4000, 4000,
+                                   driver_born=now - 70)
+            mid = MON._attention(st, {"level": "stale"}, stall, [], proj, rows, now, now - 4000, 4000,
+                                 driver_born=now - 200)
+            aged = MON._attention(st, {"level": "stale"}, stall, [], proj, rows, now, now - 4000, 4000,
+                                  driver_born=now - 400)
+            untouched = MON._attention(st, {"level": "stale"}, stall, [], proj, rows, now, now - 4000, 4000)
+        self.assertEqual((young["group"], young["code"], young["since"]), ("running", "working", None))
+        self.assertEqual(mid["group"], "running")
+        self.assertEqual(mid["code"], "quiet")
+        self.assertGreaterEqual(mid["since"], 180)
+        self.assertLess(mid["since"], 220)
+        self.assertEqual(aged["code"], "silent")
+        self.assertGreaterEqual(aged["since"], 380)
+        self.assertLess(aged["since"], 430)
+        self.assertEqual(untouched["code"], "silent")
+        self.assertGreaterEqual(untouched["since"], 3900)
+
+    def test_a_quiet_card_does_not_inherit_old_files(self):
+        """The quiet line uses the live process age, not a file left by the previous turn."""
+        proj = self.make_run("shop", "run-quiet-live", updated_ago=4000, history_ago=4000,
+                             rows=[self.ago_row(4000, "tool", tool="Read", what="old")])
+        now = time.time()
+        st = json.loads((proj / ".orkestra" / "runs" / "run-quiet-live" / "state.json").read_text(encoding="utf-8"))
+        stall = {"cls": 0, "key": "ok", "since": 4000, "text": "ok"}
+        rows = [{"ts": now - 400, "kind": "tool", "agent": "main", "tool": "Read", "what": "old"}]
+        with lang("tr"):
+            capped = MON._attention(st, {"level": "quiet"}, stall, [], proj, rows, now, now - 400, 4000,
+                                    driver_born=now - 120)
+            young = MON._attention(st, {"level": "quiet"}, stall, [], proj, rows, now, now - 400, 4000,
+                                   driver_born=now - 40)
+        self.assertEqual(capped["code"], "quiet")
+        self.assertGreaterEqual(capped["since"], 100)
+        self.assertLess(capped["since"], 140)
+        self.assertEqual((young["group"], young["code"], young["since"]), ("running", "working", None))
+
+    def test_driver_age_uses_the_youngest_matching_process(self):
+        self.assertEqual(MON._etime_seconds("01:23"), 83)
+        self.assertEqual(MON._etime_seconds("1-00:00:05"), 86405)
+        now = 1_000_000.0
+        sid = "abcdef12-3456-4000-8000-000000000000"
+        rows = [(400, f"agent --resume {sid}"), (80, f"agent --resume {sid} --model grok")]
+        self.assertEqual(MON.driver_born_at({"session_id": sid}, [], now, rows), now - 80)
+        self.assertEqual(MON.driver_born_at({"session_id": "no-such-session"}, [], now, rows), 0.0)
+
     def test_long_reasons_are_not_cut_mid_token_and_the_cap_is_marked(self):
         reason = "needs credentials: " + "x" * 400
         st = {"run_id": "r1", "status": "blocked", "phase": "plan", "blocked": {"reason": reason}}
@@ -243,6 +320,26 @@ class TestViewJson(MonitorBase):
         self.assertEqual(v["engine"], "cursor")
         raw = (proj / ".orkestra" / "runs" / "run-cursor" / "state.json").read_text(encoding="utf-8")
         self.assertIn('"engine": "claude"', raw)
+
+    def test_the_card_names_the_model_of_the_live_driver(self):
+        """The tag is the model on that run's own process, not the engine name and not a configured default."""
+        proj = self.make_run("shop", "run-model", engine="cursor")
+        sid = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+        d = self.home / "sessions"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"cursor-{sid}.json").write_text(json.dumps({
+            "project": str(proj), "run_id": "run-model", "engine": "cursor", "bound_at": self.iso(time.time()),
+        }), encoding="utf-8")
+        own = f"agent -p --resume {sid} --model grok-4.7-xhigh Orkestra run. Model: something-else"
+        other = "agent -p --resume bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee --model other-model do it"
+        prompt_only = f"agent -p --resume {sid} the prompt mentions grok-4.7-xhigh but names no flag"
+        with mock.patch.object(MON, "_agent_commands", return_value=[other, own]):
+            v = {x["run_id"]: x for x in self.views()}["run-model"]
+        self.assertEqual(v["model"], "grok-4.7-xhigh")
+        self.assertIn("v.model", SOURCE)
+        with mock.patch.object(MON, "_agent_commands", return_value=[prompt_only]):
+            bare = {x["run_id"]: x for x in self.views()}["run-model"]
+        self.assertEqual(bare["model"], "")
 
     def test_the_key_is_the_project_path_and_the_run_not_the_folder_name(self):
         self.make_run("shop", "r-same")
@@ -542,6 +639,15 @@ class TestPageStyle(PageCase):
         self.assertNotRegex(css, r"\.compact\{[^}]*max-width:560px")
         self.assertIn("max-height:min(40vh,280px)", css)
 
+    def test_task_column_keeps_whole_words(self):
+        """Body overflow-wrap:anywhere must not stack Görev or a task title one letter per line."""
+        css = self.css()
+        self.assertIn(".tt th,.tt td{overflow-wrap:normal;word-break:normal}", css)
+        self.assertIn(".tt th{", css)
+        self.assertIn("white-space:nowrap", css.split(".tt th{")[1].split("}")[0])
+        self.assertIn(".tt td.task{min-width:12em;max-width:28em;white-space:normal;overflow-wrap:break-word}", css)
+        self.assertIn('el("td","task"', self.page("en"))
+
     def test_the_page_stays_self_contained_and_never_builds_markup_from_text(self):
         page = self.page("en")
         script = re.findall(r"<script>(.*?)</script>", page, re.S)[-1]
@@ -582,6 +688,15 @@ class TestPageSections(PageCase):
                                                                           "paused": "1", "done": "1"})
         kinds = {i["key"]: i["kind"] for s in snap["sections"] for i in s["items"]}
         self.assertEqual((kinds["k6"], kinds["k4"], kinds["k2"], kinds["k1"], kinds["k5"]), ("card", "card", "card", "item", "item"))
+
+    def test_running_cards_are_longest_first(self):
+        def aged(n, seconds):
+            v = view(n, "running", "working")
+            v["timing"] = dict(v["timing"], run=seconds)
+            return v
+        snap, _ = self.snap([aged(1, 100), aged(2, 5000), aged(3, 800), aged(4, 5000)])
+        keys = {s["g"]: [i["key"] for i in s["items"]] for s in snap["sections"]}
+        self.assertEqual(keys["running"], ["k2", "k4", "k3", "k1"])
 
     def test_summary_chips_title_count_and_calm_line(self):
         snap, _ = self.snap(self.mixed())
@@ -1521,6 +1636,25 @@ class TestWeight(MonitorBase):
         self.assertEqual(out["errors"], [])
         self.assertLess(time.time() - started, 30)
         self.assertEqual(len(out["calls"]), 4)
+
+
+class TestFinishMeansDone(unittest.TestCase):
+    def test_a_deferred_task_is_not_done_and_blocks_the_finish(self):
+        from orkestra_core import runs as R
+        st = {"run_id": "r", "tasks": {"T001": {"status": "done"}, "FIX-V001": {"status": "deferred", "deferred_reason": "later"}}}
+        self.assertEqual(R.unfinished_task_ids(st), ["FIX-V001"])
+        self.assertEqual(R.unfinished_task_ids({"tasks": {"T001": {"status": "done"}}}), [])
+        for target in ("deliver", "done"):
+            problems = R.preconditions(Path("/tmp/does-not-matter"), st, target)
+            self.assertTrue(any("FIX-V001" in p and "deferred" in p for p in problems), problems)
+
+    def test_a_finished_row_names_unfinished_work_and_does_not_wear_the_risk_chip(self):
+        page = SOURCE.split('PAGE = r"""', 1)[1].split('"""', 1)[0]
+        self.assertIn('v.status==="done"', page)
+        self.assertIn("ui_gap_n", page)
+        self.assertIn("ui_t_deferred", page)
+        self.assertIn("rkn gap", page)
+        self.assertIn(".rkn.gap{", SOURCE)
 
 
 if __name__ == "__main__":

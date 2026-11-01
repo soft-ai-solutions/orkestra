@@ -137,6 +137,30 @@ def git_grants(prompt: str) -> List[str]:
     return sorted(cats)
 
 
+# An explicit ask to publish. A mention of the word, a guard, or a refusal is not one.
+_DEPLOY_NEG = _LazyRe(
+    r"\b(?:don't|do\s+not|never|without)\s+(?:\w+\s+){0,3}?deploy\b"
+    r"|\bdeploy\s+(?:etme|yapma|etmeyin|yapmayın|etmem|yapmam)\w*"
+    r"|\bcanlıya\s+(?:alma|çıkarma|cikarma|gönderme|gonderme)\w*",
+    re.I)
+_DEPLOY_POS = _LazyRe(
+    r"\bprod(?:uction)?\s+build\b.{0,24}\bdeploy\b"
+    r"|\bdeploy\s+(?:yap|et|edin|edelim|etsin|ediyorum)\b"
+    r"|\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?deploy\b"
+    r"|\bwrangler\s+deploy\b"
+    r"|\bcanlıya\s+(?:al|çıkar|cikar|gönder|gonder|yayınla|yayinla)\b"
+    r"|\bdeploy\s*:.{0,180}\b(?:istedi|istiyor|istiyorum|istedim|wants|asked|requested)\b",
+    re.I)
+
+
+def deploy_requested(prompt: str) -> bool:
+    """The user asked for a non-destructive publish. Mentions and refusals do not count."""
+    text = _lower(prompt)
+    if not text or _DEPLOY_NEG.search(text):
+        return False
+    return bool(_DEPLOY_POS.search(text))
+
+
 # --- control words: what the USER says to let a chat that does not drive a run change it (guards.ownership_guard)
 # and to let go of the run the chat is bound to. A mention is not a request: "add a pause button to the player" and
 # "the abort handler is broken" say nothing about the run, so the verb must have the run (or "it", "this") for its
@@ -193,8 +217,11 @@ def control_grants(prompt: str) -> List[str]:
 
 
 def prompt_grants(prompt: str) -> List[str]:
-    """Everything the user's message permits: the git grants and the run-control grants (stored together per prompt)."""
-    return sorted(set(git_grants(prompt)) | set(control_grants(prompt)))
+    """Everything the user's message permits: git, run-control, and an explicit deploy ask."""
+    cats = set(git_grants(prompt)) | set(control_grants(prompt))
+    if deploy_requested(prompt):
+        cats.add("deploy")
+    return sorted(cats)
 
 
 _APPROVE_EXACT = _LazyRe(

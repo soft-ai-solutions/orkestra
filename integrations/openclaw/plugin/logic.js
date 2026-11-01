@@ -3,6 +3,7 @@
 // expansion, notification text and change detection. No I/O here; see index.js / client.js.
 // Text for a person comes from messages.js in English or Turkish (every formatter takes an optional `lang`, default:
 // the language resolved by lang.js); everything that RECOGNISES text (job header, approval words) accepts both.
+import { createHash } from "node:crypto";
 import { resolveLang } from "./lang.js";
 import { t } from "./messages.js";
 
@@ -303,4 +304,125 @@ export function parseSentMessageIds(stdout) {
     // Not JSON: no ids; routing still works through the quoted header.
   }
   return [...ids];
+}
+
+// ---------------------------------------------------------------- owner command (Telegram passphrase)
+// The passphrase itself is never stored: the plugin config holds `{ salt, sha256, words }`, where sha256 is the hex
+// digest of `${salt}\n${its folded letters and digits, spaces removed}` (ownerPhraseDigest) and `words` its number of
+// words. A message carries the owner command when a run of consecutive words in it (up to `words` + 3 of them) folds
+// to the same digest: folding (Turkish letters → ASCII, lower case, no punctuation or spaces) makes
+// "Fırat Kocabay emrediyor!", "FiratKocabay Emrediyor" and "firatkocabay emrediyor" the same phrase.
+
+/** The words of a text with their place in it: `[{ word (folded), start, end }]`. */
+export function foldedWords(text) {
+  const out = [];
+  for (const m of String(text ?? "").matchAll(/[\p{L}\p{N}]+/gu)) {
+    const word = fold(m[0]).replace(/[^a-z0-9]/g, "");
+    if (word) {
+      out.push({ word, start: m.index, end: m.index + m[0].length });
+    }
+  }
+  return out;
+}
+
+/** The digest the config stores for a passphrase (the set-up script and the tests use it). */
+export function ownerPhraseDigest(salt, phrase) {
+  const words = foldedWords(phrase).map((w) => w.word);
+  return { salt, words: words.length, sha256: createHash("sha256").update(`${salt}\n${words.join("")}`).digest("hex") };
+}
+
+/** Whether the owner config is usable. */
+export function ownerConfigValid(owner) {
+  return Boolean(owner && typeof owner.salt === "string" && owner.salt.length >= 16 &&
+    /^[a-f0-9]{64}$/.test(String(owner.sha256 ?? "")) && Number.isInteger(owner.words) && owner.words >= 1 &&
+    owner.words <= 12);
+}
+
+/**
+ * The owner command in a message: `{ request }` (the message without the passphrase and the punctuation around it)
+ * or null when the passphrase is not in it.
+ */
+export function matchOwnerPhrase(text, owner) {
+  if (!ownerConfigValid(owner)) {
+    return null;
+  }
+  const raw = String(text ?? "");
+  const words = foldedWords(raw);
+  for (let i = 0; i < words.length; i += 1) {
+    for (let n = 1; n <= owner.words + 3 && i + n <= words.length; n += 1) {
+      const span = words.slice(i, i + n);
+      const digest = createHash("sha256").update(`${owner.salt}\n${span.map((w) => w.word).join("")}`).digest("hex");
+      if (digest !== owner.sha256) {
+        continue;
+      }
+      const before = raw.slice(0, span[0].start).replace(/[\s:;,.!\-–]+$/u, "");
+      const after = raw.slice(span[span.length - 1].end).replace(/^[\s:;,.!\-–]+/u, "");
+      return { request: [before, after].filter((x) => x.trim()).join(" ").trim() };
+    }
+  }
+  return null;
+}
+
+/**
+ * Project folders a request names, in the order they appear: "namaz vakitlerinde", "Namaz-Vakitleri'nde" and
+ * "namazvakitleri" all name namaz-vakitleri (a Turkish suffix of up to 6 letters may follow the last word).
+ * @param {string} text
+ * @param {Array<string | { name: string }>} projects
+ * @returns {string[]}
+ */
+export function mentionedProjects(text, projects) {
+  const words = foldedWords(text).map((w) => w.word);
+  const found = [];
+  for (const name of (projects ?? []).map((p) => (typeof p === "string" ? p : p?.name)).filter(Boolean)) {
+    const key = projectKey(name);
+    if (key.length < 3) {
+      continue;
+    }
+    let at = -1;
+    for (let i = 0; i < words.length && at < 0; i += 1) {
+      let joined = "";
+      for (let j = i; j < Math.min(words.length, i + 4); j += 1) {
+        const prev = joined;
+        joined += words[j];
+        if (joined === key || (joined.startsWith(key) && prev.length < key.length && joined.length - key.length <= 6)) {
+          at = i;
+          break;
+        }
+        if (!key.startsWith(joined)) {
+          break;
+        }
+      }
+    }
+    if (at >= 0) {
+      found.push({ name, at });
+    }
+  }
+  return found.sort((a, b) => a.at - b.at).map((f) => f.name);
+}
+
+// "ide ayaklandır", "IDE'yi ayağa kaldır", "ide'yi yeniden başlat", "restart the ide", "revive ide", "/ide"
+const REVIVE_VERB = /^(ayaklandir|ayaga|kaldir|baslat|yeniden|restart|revive|relaunch|start|reopen|ac|acar|acin)/;
+
+/** Whether a short message asks to bring the IDE and the Orkestra tools back. */
+export function isReviveRequest(text) {
+  const words = foldedWords(text).map((w) => w.word);
+  return words.length >= 1 && words.length <= 8 && words.includes("ide") &&
+    (words.length === 1 || words.some((w) => w !== "ide" && REVIVE_VERB.test(w)));
+}
+
+/** The answer to a revive: one line per tool with its state. */
+export function formatRevive(result, lang = resolveLang()) {
+  const states = ["running", "started", "failed", "missing", "invalid", "unsupported"];
+  const line = (name, state) => t("revive.line", {
+    mark: state === "running" || state === "started" ? "✅" : "⚠️",
+    name,
+    state: states.includes(state) ? t(`revive.state.${state}`, {}, lang) : String(state),
+  }, lang);
+  const lines = [t("revive.title", {}, lang)];
+  lines.push(line("Orkestra bridge", result?.bridge?.state));
+  lines.push(line("Orkestra dashboard", result?.dashboard?.state));
+  for (const app of result?.apps ?? []) {
+    lines.push(line(app.app, app.state));
+  }
+  return lines.join("\n");
 }

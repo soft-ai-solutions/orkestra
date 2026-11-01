@@ -141,3 +141,45 @@ test("resolveProject: exact, folded, ambiguous and unknown names", async () => {
   assert.deepEqual(resolveProject("  ", list), { suggestions: [] });
   assert.equal(projectKey("Çalışma Alanı-2"), "calismaalani2");
 });
+
+// ---------------------------------------------------------------- owner command helpers
+import { isReviveRequest as reviveAsk, matchOwnerPhrase as matchPhrase, mentionedProjects as mentioned,
+  ownerConfigValid as validOwner, ownerPhraseDigest as digestOf } from "./logic.js";
+
+test("the passphrase is matched by digest, whatever its case, Turkish letters, spacing and punctuation", () => {
+  const owner = digestOf("0123456789abcdef", "Fırat Kocabay emrediyor");
+  assert.equal(owner.words, 3);
+  assert.ok(!JSON.stringify(owner).includes("emrediyor"));
+  for (const [text, request] of [
+    ["firatkocabay emrediyor: pomi'de menüyü düzelt", "pomi'de menüyü düzelt"],
+    ["FIRAT KOCABAY EMREDİYOR! tinko", "tinko"],
+    ["pomi'yi yayınla, Fırat-Kocabay emrediyor.", "pomi'yi yayınla"],
+    ["firatkocabay emrediyor", ""],
+  ]) {
+    assert.deepEqual(matchPhrase(text, owner), { request }, text);
+  }
+  assert.equal(matchPhrase("firat emrediyor pomi", owner), null);
+  assert.equal(matchPhrase("firatkocabay emrediyor", { ...owner, salt: "another-salt-0000" }), null);
+  assert.equal(validOwner({ salt: "short", sha256: owner.sha256, words: 3 }), false);
+  assert.equal(validOwner(owner), true);
+});
+
+test("projects named in a request, with Turkish suffixes and spaces, in order", () => {
+  const list = ["namaz-vakitleri", "pomi", "pulse-race", "pulse-arena", "roadprimer", "docs", "pi"];
+  assert.deepEqual(mentioned("Namaz Vakitleri'nde bildirim", list), ["namaz-vakitleri"]);
+  assert.deepEqual(mentioned("namazvakitlerinde ve pomide", list), ["namaz-vakitleri", "pomi"]);
+  assert.deepEqual(mentioned("pulse race'te araba", list), ["pulse-race"]);
+  assert.deepEqual(mentioned("road primer uygulaması", list), ["roadprimer"]);
+  assert.deepEqual(mentioned("pomidor salatası", list), ["pomi"]);         // a suffix, accepted (asked when ambiguous)
+  assert.deepEqual(mentioned("tinko oyunu", list), []);
+  assert.deepEqual(mentioned("pi hesapla", list), []);                     // names under 3 letters are never guessed
+});
+
+test("revive requests are short and name the IDE", () => {
+  for (const text of ["ide ayaklandır", "IDE'yi ayağa kaldır", "ide yeniden başlat", "restart the ide", "/ide", "ide"]) {
+    assert.equal(reviveAsk(text), true, text);
+  }
+  for (const text of ["ide ayarları nerede", "namaz vakitleri projesinde ide ayarlarını düzelt lütfen bugün hemen", "ayaklandır"]) {
+    assert.equal(reviveAsk(text), false, text);
+  }
+});

@@ -474,7 +474,10 @@ memory only. The dashboard (`orkestra dashboard`) offers the same on its own pag
 - **OpenClaw**: do not give OpenClaw's Telegram bot token to the bridge (a token has one consumer). Call
   `bridge/orkestra_client.py` or the HTTP API (`POST /jobs`, `GET /runs`) instead; see
   [integrations/openclaw/CONTRACT.md](integrations/openclaw/CONTRACT.md). The bundled OpenClaw plugin also turns a
-  request written in plain words in Telegram into a run (agent tool `orkestra_run`, same checks as `/run`).
+  request written in plain words in Telegram into a run (agent tool `orkestra_run`, same checks as `/run`). A message
+  with the owner's passphrase becomes an owner job (best model, autopilot to the end, release steps allowed, nothing
+  irreversible; Orkestra is started first when it is down), and `/ide` brings the bridge, the dashboard and the IDE
+  back. See "Owner commands" in the contract.
 - The machine that runs the bridge must be awake and online for Telegram-started runs.
 
 ## Language

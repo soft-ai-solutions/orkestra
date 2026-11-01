@@ -19,3 +19,6 @@ Goal: an approval-ready, implementation-proof plan. Output: `plan.md` + `reviews
    - **Bugfix / perf** (`Type:` in the classification block): at least one task has `TDD: required` (repro-first) and T001 references the symptom FR.
    - **Size only rises:** leaving plan, an XS/S run whose plan touches security or data paths, has more than 3 tasks or more than 8 files becomes M (ledger line says why), so the plan-critic is then required. M/L are never changed.
 6. `orkestra phase next`.
+7. A written refusal is a finished outcome, not a research project. If the constitution names no allowed gap and the
+   baseline is already green, write that refusal in spec.md and a one-task plan (`Files: none`, `TDD: n/a`) and leave
+   this phase. Do not keep dispatching after that. Ten minutes in plan with no product change is long enough to know.

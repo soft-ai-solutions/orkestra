@@ -210,6 +210,8 @@ class TestPredicates(unittest.TestCase):
         f = self.F.dead_session(ctx([], T0, sessions=sess, pid_alive=lambda p: True))          # alive host, silent: a flag
         self.assertEqual(f["level"], "flag")
         self.assertIsNone(self.F.dead_session(ctx([], T0, sessions=[{"id": "s1", "age": 30.0, "host_pid": None}])))
+        self.assertIsNone(self.F.dead_session(ctx([], T0, sessions=[{"id": "s1", "age": 30.0, "host_pid": 9}],
+                                                  pid_alive=lambda p: False)))
         flag = self.F.dead_session(ctx([], T0, sessions=[{"id": "s1", "age": 500.0, "host_pid": None}]))
         self.assertEqual(flag["level"], "flag")                                                # no pid recorded: never a notice
         self.assertIsNone(self.F.dead_session(ctx([], T0, sessions=[])))

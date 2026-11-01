@@ -549,7 +549,7 @@ class TestFeedForPeople(MonitorBase):
             (row("idle", "tur bitti \u00b7 durum awaiting_user (cevap i\u00e7in ba\u011f korundu)"), "waiting for your answer", "cevab\u0131n\u0131 bekliyor"),
             (row("idle", "turn ended \u00b7 status done"), "the run is finished", "\u00e7al\u0131\u015fma bitti"),
             (row("idle", "turn ended \u00b7 status paused"), "run status: paused", "\u00e7al\u0131\u015fma durumu: duraklat\u0131ld\u0131"),
-            (row("idle", "turn ended \u00b7 transcript is off-topic \u2192 session unbound"), "session left this run", "oturum bu \u00e7al\u0131\u015fmadan ayr\u0131ld\u0131"),
+            (row("idle", "turn ended \u00b7 transcript is off-topic \u2192 session unbound"), "this turn did not keep driving the run", "bu tur \u00e7al\u0131\u015fmay\u0131 s\u00fcrd\u00fcrmedi"),
             (row("idle", "turn ended (continue-nudge limit)"), "reminder limit reached", "hat\u0131rlatma s\u0131n\u0131r\u0131na ula\u015f\u0131ld\u0131"),
             (row("wait_agents", "waiting for subagent: implementer, reviewer (2)"), "implementer, reviewer (2)", "implementer, reviewer (2)"),
             (row("wait_agents", "subagent finished, waiting for its report (1)"), "report not delivered yet (1)", "rapor hen\u00fcz gelmedi (1)"),

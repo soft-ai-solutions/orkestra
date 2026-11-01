@@ -79,6 +79,10 @@ test("every key the code uses exists, and every key is used", () => {
   for (const status of ["running", "queued", "awaiting_user", "done", "blocked", "error", "cancelled", "paused"]) {
     used.add(`label.${status}`);
   }
+  // formatRevive() builds `revive.state.<state>` for the states orkestra_client.py revive reports
+  for (const state of ["running", "started", "failed", "missing", "invalid", "unsupported"]) {
+    used.add(`revive.state.${state}`);
+  }
   const known = new Set(Object.keys(MESSAGES.en));
   assert.deepEqual([...used].filter((k) => !known.has(k)).sort(), [], "keys used but missing from the tables");
   assert.deepEqual([...known].filter((k) => !used.has(k)).sort(), [], "keys in the tables that nothing uses");

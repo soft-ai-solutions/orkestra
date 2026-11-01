@@ -8,7 +8,13 @@
 //   The agent gets two tools: orkestra_run (start a run for a request the owner made in plain words, with the same
 //   checks as /run) and orkestra_status (read-only).
 //   Notifier service: polls `status --chat-id` and announces each stopped job state exactly once.
+//   Owner command: a message of the owner that carries their passphrase (config `ownerCommand`: salt + digest only,
+//   logic.js matchOwnerPhrase) is handled here and never reaches the agent or its transcript: Orkestra is started when
+//   it is down, the project is read from the message (asked once when unclear) and the run starts as an owner job (best
+//   model, autopilot, release steps allowed, nothing irreversible; bridge + orkestra_core.state.OWNER_GRANTS).
+//   /ide or a short "ide ayaklandır": brings back the bridge, the dashboard and the IDE apps (config `ideApps`).
 // OpenClaw keeps the Telegram bot (a Telegram bot token has ONE consumer; two pollers get 409 Conflict); the bridge never gets its token.
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -21,7 +27,12 @@ import {
   findOpenRun,
   formatBusyProject,
   formatNotification,
+  formatRevive,
   formatStatus,
+  isReviveRequest,
+  matchOwnerPhrase,
+  mentionedProjects,
+  ownerConfigValid,
   parseJobRef,
   parseSentMessageIds,
   resolveProject,
@@ -30,6 +41,9 @@ import { t } from "./messages.js";
 
 const PROJECT_NAME = /^[A-Za-z0-9._-]{1,80}$/;
 const MAX_MESSAGE_MAP = 300;
+const OWNER_PENDING_MS = 30 * 60_000;
+const OWNER_REF = /\[owner ([a-f0-9]{8})\]/;
+const LETTERS = "abcdefgh";
 
 function readState(file) {
   try {
@@ -94,6 +108,13 @@ export default definePluginEntry({
     const monitor = createOrkestraMonitor({ runner, python, cliPath });
     // Telegram message id → job, filled by the notifier; fallback when the quote is unavailable.
     let messages = {};
+    const owner = ownerConfigValid(cfg.ownerCommand) ? cfg.ownerCommand : null;
+    if (cfg.ownerCommand && !owner) {
+      api.logger.warn("orkestra-bridge: config.ownerCommand is invalid (salt >= 16 chars, sha256 hex, words); owner commands off");
+    }
+    const ideApps = Array.isArray(cfg.ideApps) ? cfg.ideApps.filter((a) => typeof a === "string" && a.trim()) : ["Cursor"];
+    // owner commands waiting for the project (the question carries `[owner <code>]`); kept in memory for 30 minutes
+    const pendingOwner = new Map();
 
     /**
      * Starts a run for the owner: /run and the orkestra_run tool both come here, so both get the same checks. The
@@ -101,7 +122,7 @@ export default definePluginEntry({
      * run in that project refuses the start (fail closed: no reliable run list, no start).
      * @returns {Promise<{ ok: boolean, text: string, job?: any, project?: string }>}
      */
-    async function startRun(projectName, request, engine) {
+    async function startRun(projectName, request, engine, asOwner = false) {
       let project = String(projectName ?? "").trim();
       // Only a spelling that folds to exactly one listed folder is corrected ("Namaz Vakitleri" → namaz-vakitleri). A
       // name that can be a folder goes on as typed: the open-run check and the bridge decide about it (a folder outside
@@ -134,9 +155,17 @@ export default definePluginEntry({
       if (busy) {
         return { ok: false, text: formatBusyProject(project, busy), project };
       }
-      const res = await client.start(project, request, chatId, engine);
+      const res = await client.start(project, request, chatId, engine, asOwner);
       if (!res.ok) {
         return { ok: false, text: t("cmd.start_failed", { error: res.error }) + hint, project };
+      }
+      if (asOwner) {
+        return {
+          ok: true,
+          project: res.body.project,
+          job: res.body,
+          text: `${t("owner.started", { project: res.body.project, id: res.body.id })}\n${t("owner.started_note")}`,
+        };
       }
       return {
         ok: true,
@@ -149,6 +178,66 @@ export default definePluginEntry({
             engine: res.body.engine && res.body.engine !== "claude" ? ` · ${res.body.engine}` : "",
           }) + `\n${t("cmd.started_note")}`,
       };
+    }
+
+    /** An owner command (passphrase already checked): bring Orkestra up, find the project, start the owner job. */
+    async function ownerCommand(request) {
+      if (String(request ?? "").trim().length < 3) {
+        return t("owner.empty");
+      }
+      const up = await client.ensure();
+      if (!up.ok) {
+        return t("owner.bridge_down", { error: up.error });
+      }
+      const listed = await client.projects();
+      const names = listed.ok && Array.isArray(listed.body?.projects)
+        ? listed.body.projects.map((p) => (typeof p === "string" ? p : p?.name)).filter(Boolean)
+        : [];
+      const hits = mentionedProjects(request, names).slice(0, LETTERS.length);
+      if (hits.length === 1) {
+        return (await startRun(hits[0], request, undefined, true)).text;
+      }
+      const now = Date.now();
+      for (const [key, entry] of pendingOwner) {
+        if (now - entry.at > OWNER_PENDING_MS) pendingOwner.delete(key);
+      }
+      const code = randomBytes(4).toString("hex");
+      pendingOwner.set(code, { request, at: now, options: hits });
+      return hits.length
+        ? t("owner.which_of", { code, list: hits.map((h, i) => `${LETTERS[i]}) ${h}`).join("\n") })
+        : t("owner.which_project", { code, list: names.join(", ") || "-" });
+    }
+
+    /** The owner answered "which project?": a letter of the list or a folder name. */
+    async function ownerChoice(code, answer) {
+      const entry = pendingOwner.get(code);
+      if (!entry || Date.now() - entry.at > OWNER_PENDING_MS) {
+        pendingOwner.delete(code);
+        return t("owner.expired");
+      }
+      const letter = /^\(?([a-h])[).:]?$/i.exec(String(answer ?? "").trim());
+      let project = letter ? entry.options[LETTERS.indexOf(letter[1].toLowerCase())] : undefined;
+      if (!project) {
+        const listed = await client.projects();
+        const found = resolveProject(String(answer ?? "").trim(), listed.ok ? listed.body?.projects : []);
+        project = found.project ?? (PROJECT_NAME.test(String(answer ?? "").trim()) ? String(answer).trim() : undefined);
+      }
+      if (!project) {
+        return t("cmd.unknown_project", { name: short(answer, 60) });
+      }
+      const res = await startRun(project, entry.request, undefined, true);
+      if (res.ok) {
+        pendingOwner.delete(code);
+      }
+      return res.text;
+    }
+
+    async function reviveText() {
+      const res = await client.revive(ideApps);
+      if (res.body && res.body.bridge) {
+        return formatRevive(res.body);
+      }
+      return t("revive.failed", { error: res.error });
     }
 
     async function statusText() {
@@ -217,6 +306,13 @@ export default definePluginEntry({
         }
         return { text: (await startRun(project, request, engine)).text };
       },
+    });
+
+    registerBoth(["ide"], {
+      description: t("cmd.ide_desc"),
+      channels: ["telegram"],
+      requireAuth: true,
+      handler: async () => ({ text: await reviveText() }),
     });
 
     registerBoth(["durum", "runs"], {
@@ -305,13 +401,29 @@ export default definePluginEntry({
       }
       const quoted = event.replyToBody ?? ctx.replyToBody;
       const replyToId = String(event.replyToId ?? ctx.replyToId ?? "");
+      let content = String(event.content ?? event.body ?? "");
+      if (isReviveRequest(content)) {
+        return { handled: true, text: await reviveText() };
+      }
+      const pending = typeof quoted === "string" ? OWNER_REF.exec(quoted) : null;
+      if (pending) {
+        const answer = owner ? (matchOwnerPhrase(content, owner)?.request ?? content) : content;
+        return { handled: true, text: await ownerChoice(pending[1], answer) };
+      }
       const ref =
         parseJobRef(quoted) ??
         (replyToId ? (messages[replyToId] ?? null) : null);
+      const command = owner ? matchOwnerPhrase(content, owner) : null;
+      if (command && !ref) {
+        return { handled: true, text: await ownerCommand(command.request) };
+      }
+      if (command) {
+        content = command.request;          // a reply to a job: the passphrase is never forwarded
+      }
       if (!ref) {
         return;
       }
-      const text = expandOptionReply(event.content ?? event.body ?? "", quoted);
+      const text = expandOptionReply(content, quoted);
       if (!text) {
         return { handled: true, text: t("route.empty") };
       }

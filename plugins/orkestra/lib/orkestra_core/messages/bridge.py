@@ -61,6 +61,7 @@ EN: Dict[str, str] = {
     "bridge.err.configured_project_unavailable": "configured project is unavailable: {name}",
     "bridge.err.no_waiting_job": "no job is waiting for a reply from this chat",
     "bridge.job.empty_request": "the request is empty",
+    "bridge.job.owner_source": "an owner command can only come from OpenClaw or the command line, not from {source}",
     "bridge.job.already_open": "{project} already has an open job ({id}, {status}). Finish it first or send /cancel.",
     "bridge.job.still_running": "the job is still running; I will write to you when it finishes",
     "bridge.job.closed": "the job is closed ({status}); use /run to start a new one",
@@ -177,6 +178,9 @@ EN: Dict[str, str] = {
         "  orkestra_client.py cancel --chat-id ID              stop the latest open job of that chat\n"
         "  orkestra_client.py runs [--json]                    live view: every open run, its phase, what it does now\n"
         "  orkestra_client.py projects                         project folders the bridge may start\n"
+        "  orkestra_client.py start ... --owner                owner command: best model, release steps allowed, no questions\n"
+        "  orkestra_client.py ensure                           start the bridge when it is not running\n"
+        "  orkestra_client.py revive [--app NAME]...           bring back the bridge, the dashboard and the IDE apps\n"
         "\n"
         "Reads the bearer token from ~/.orkestra/bridge.secret.json (same machine). Prints JSON (the message for "
         "`wait`).\n"
@@ -243,6 +247,7 @@ TR: Dict[str, str] = {
     "bridge.err.configured_project_unavailable": "yapılandırılmış proje kullanılamıyor: {name}",
     "bridge.err.no_waiting_job": "bu sohbetten yanıt bekleyen bir iş yok",
     "bridge.job.empty_request": "istek boş",
+    "bridge.job.owner_source": "sahip komutu yalnız OpenClaw'dan veya komut satırından gelebilir, {source} kaynağından gelemez",
     "bridge.job.already_open": "{project} için açık bir iş var ({id}, {status}). Önce onu bitir veya /iptal.",
     "bridge.job.still_running": "iş hâlâ çalışıyor; bitince sana yazacağım",
     "bridge.job.closed": "iş kapandı ({status}); yeni iş için /yap kullan",
@@ -361,6 +366,9 @@ TR: Dict[str, str] = {
         "  orkestra_client.py cancel --chat-id ID              o sohbetin son açık işini durdurur\n"
         "  orkestra_client.py runs [--json]                    canlı görünüm: her açık çalışma, fazı, şu an ne yaptığı\n"
         "  orkestra_client.py projects                         bridge'in başlatabileceği proje klasörleri\n"
+        "  orkestra_client.py start ... --owner                sahip komutu: en iyi model, yayın adımlarına izin, soru yok\n"
+        "  orkestra_client.py ensure                           bridge çalışmıyorsa başlatır\n"
+        "  orkestra_client.py revive [--app AD]...             bridge'i, dashboard'u ve IDE uygulamalarını geri getirir\n"
         "\n"
         "Bearer token'ı ~/.orkestra/bridge.secret.json dosyasından okur (aynı makine). JSON yazar (`wait` için "
         "mesajı).\n"

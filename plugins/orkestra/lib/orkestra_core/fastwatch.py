@@ -307,13 +307,18 @@ def soft_silence(c: RunCtx) -> Optional[Dict[str, Any]]:
 
 def dead_session(c: RunCtx) -> Optional[Dict[str, Any]]:
     """Every bound session is gone: its recorded host pid is dead (notify), or it has been silent beyond the lease
-    (a flag only: a user who is merely reading is not a dead session)."""
+    (a flag only: a user who is merely reading is not a dead session). A dead pid younger than one health check
+    is not announced: a restart often looks like that for a few seconds and then binds again."""
     if c.status != "active" or not c.sessions:
         return None
     pids = [s.get("host_pid") for s in c.sessions]
+    confirm = float(c.wd.get("health_check_seconds") or 120)
     if c.pid_alive is not None and all(isinstance(p, int) and p > 0 for p in pids) \
             and not any(c.pid_alive(p) for p in pids):
-        return _f("dead_session", c.now - min(float(s.get("age") or 0) for s in c.sessions), pid=pids[0])
+        age = min(float(s.get("age") or 0) for s in c.sessions)
+        if age < confirm:
+            return None
+        return _f("dead_session", c.now - age, pid=pids[0])
     lease = float(c.wd.get("lease_seconds") or 120)
     if all(float(s.get("age") or 0) > lease for s in c.sessions):
         return _f("dead_session", c.now - min(float(s.get("age") or 0) for s in c.sessions), level="flag")
@@ -601,6 +606,8 @@ class Watcher:
         self.fail_streak = 0
         self.breaker_open = False
         self.ticks = 0
+        self.health_checks = 0
+        self.last_health = -1e18
         self.started = time.time()
         self.incidents: Dict[str, Dict[str, Any]] = {}
         self.frozen: set = set()
@@ -674,6 +681,10 @@ class Watcher:
         hot = any(h - now <= HOT_WITHIN for rc in self.runs.values() for h in rc.hints if h >= now - 1)
         self.interval = TICK_IDLE if not self.runs else (TICK_HOT if hot else TICK)
         self.ticks += 1
+        every = float(wd.get("health_check_seconds") or 120)
+        if now - self.last_health >= every:
+            self.last_health = now
+            self.health_checks += 1
         if now - self.last_status >= 15 or self._actions:
             self._write_status(now)
             self.last_status = now
@@ -1050,6 +1061,7 @@ class Watcher:
         try:
             write_json_atomic(_status_path(), {
                 "version": 1, "pid": os.getpid(), "started": self.started, "ts": time.time(), "ticks": self.ticks,
+                "health_checks": self.health_checks, "health_every": float(T.wd_cfg().get("health_check_seconds") or 120),
                 "interval": self.interval, "breaker_open": self.breaker_open, "stopped": stopped,
                 "open_runs": len(self.runs), "runs": runs, "incidents": self.incidents})
         except OSError:

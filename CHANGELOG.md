@@ -6,6 +6,16 @@ Orkestra now serves people in English and Turkish (English is the default), runs
 with Python 3.9 to 3.14, and its repository documentation is available in both languages. Entries up to 1.6.0 below
 were written in Turkish and are kept as they were.
 
+### Telegram owner commands and `/ide`
+- **Owner command:** a Telegram message with the owner's passphrase (stored only as a salted SHA-256 in the plugin
+  config, matched by the plugin, never shown to the agent) starts Orkestra when it is down, finds the project in the
+  message (asks once when unclear) and runs an owner job: claude engine with `owner_model` (`fable`, fallback `opus`,
+  effort `xhigh`), autopilot, up to 8 automatic continuations. For that job's session the hooks allow commit, push,
+  branch, PR, tag and deploy (`state.OWNER_GRANTS`, new `deploy` grant in `guards.deploy_guard`); force push, amend,
+  hard reset, discarding changes, recursive deletes and destructive remote actions stay refused.
+- **`/ide`** (or `ide ayaklandır`) brings back the bridge, the dashboard and the IDE apps (`ideApps`, default Cursor)
+  through the new `orkestra_client.py ensure` and `revive`.
+
 ### Telegram through OpenClaw: plain-language requests, a client that rides out hiccups
 - **Plain words become a run:** the OpenClaw plugin gives the agent `orkestra_run` and `orkestra_status`. "Fix the
   notification sound in namaz vakitleri" written in Telegram starts a tracked, guarded headless run with notifications
