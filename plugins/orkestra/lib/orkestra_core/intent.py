@@ -37,13 +37,16 @@ _QUESTION_TAIL = _LazyRe(r"\b(commit|komit|push)\w*\s+(mı|mi|mu|mü)\b|\b(commi
 _PLURAL = _LazyRe(r"\b(commit|komit)'?ler\w*|\bpush'?lar\b", re.I)
 _LEAD = r"(^|[.!?,;:]\s*|\b(please|and|then|now|also|just|only|ve|sonra|lütfen|şimdi|hemen|sadece|yalnızca|bir\s+de|da|de)\s+)"
 
+# "commit & push", "commit and push", "commit ve push" (+ "da yap"); not when negated or asked as a question.
+_COMMIT_AND_PUSH = (r"\b(commit|komit)\s*(&|and|ve|\+|/)\s*push\b"
+                    r"(?!\s*(da\s+|de\s+)?(yapma|etme|atma|yaptın|ettin|attın|yapıldı|edildi|m[ıiuü]\b|bildirim|notification))")
 _COMMIT_POS = _LazyRe(
     r"\b(commit|komit)'?ler\s*m[ıi]s[ıi]n\w*"
     r"|\b(commit|komit)'?le(?!n?m[ae]|r\b|ri\b|rin|re\b|rde|rden|ri\w)\w*"   # commitle, commitleyip (not commitler/-leri)
     r"|\b(commit|komit)\s+(at|et|yap|oluştur|create)(?!m[ae])\b"  # commit at / commit et
     r"|\bcommit\s+(it|this|that|these|them|all|everything|the\s+changes|changes|my\s+changes|your\s+changes|the\s+fix|the\s+work)\b"
     r"|" + _LEAD + r"commit\b" + _NOUNISH +
-    r"|\bgit\s+commit\b", re.I)
+    r"|\bgit\s+commit\b|" + _COMMIT_AND_PUSH, re.I)
 _COMMIT_NEG = _LazyRe(r"\b(commit|komit)'?(le)?n?m[ae]\w*|\b(commit|komit)\s+(atma|etme|yapma)\w*", re.I)
 
 _PUSH_POS = _LazyRe(
@@ -51,7 +54,7 @@ _PUSH_POS = _LazyRe(
     r"|\bpush\s+(et|yap|at)(?!m[ae])\b"
     r"|\bpush\s+(it|this|that|them|the\s+changes|changes|everything|to\s+\w+|origin|upstream)\b"
     r"|" + _LEAD + r"push\b" + _NOUNISH +
-    r"|\bgit\s+push\b", re.I)
+    r"|\bgit\s+push\b|" + _COMMIT_AND_PUSH, re.I)
 _PUSH_NEG = _LazyRe(r"\bpush'?(la)?n?m[ae]\w*|\bpush\s+(etme|yapma|atma)\w*", re.I)
 
 _NEG_EN = _LazyRe(r"\b(don'?t|do\s+not|never|no|without|avoid|dont)\s+(\w+\s+){0,3}?(commit|push)\w*", re.I)
@@ -109,6 +112,9 @@ def git_grants(prompt: str) -> List[str]:
             commit_ok = False
         elif verb == "push":
             push_ok = False
+    if re.search(r"\b(commit|komit)\s*(&|and|ve|\+|/)\s*push\s*(da\s+|de\s+)?"
+                 r"(yapma|etme|atma|yaptın|ettin|attın|yapıldı|edildi|m[ıiuü]\b)", text):
+        commit_ok = push_ok = False
 
     if commit_ok:
         cats.add("commit")

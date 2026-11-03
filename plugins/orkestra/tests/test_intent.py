@@ -57,6 +57,12 @@ GRANT_CASES = {
     "pushla ama force push yapma": ["push"],
     "pushlar mısın?": ["push"],
     "reset --hard yap": ["discard", "hard_reset"],
+    "tüm projelerde git commit & push da yap": ["commit", "push"],
+    "commit & push yap": ["commit", "push"],
+    "commit and push everything": ["commit", "push"],
+    "değişiklikleri commit ve push et": ["commit", "push"],
+    "commit & push yapma": [],
+    "commit & push yaptın mı?": [],
 }
 
 APPROVAL_CASES = {
