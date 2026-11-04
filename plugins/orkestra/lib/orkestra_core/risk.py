@@ -418,8 +418,55 @@ def _own_site_inline_check(segs: List[Segment]) -> bool:
     return all(any(a == flag or a.startswith(flag) for flag in _INLINE_EVAL for a in s.args) for s in interps)
 
 
+def _drop_unclosed_quote(cmd: str) -> str:
+    """Cut an activity row at an unclosed quote.
+
+    Rows are stored at 480 characters, so a quoted program can lose its closing quote. The shell
+    would not run the tail as commands. Treating that tail as commands marks a package-script
+    name such as `wrangler deploy` as a publish."""
+    quote = ""
+    start = -1
+    i, n = 0, len(cmd)
+    while i < n:
+        ch = cmd[i]
+        if quote:
+            if ch == "\\" and quote == '"' and i + 1 < n:
+                i += 2
+                continue
+            if ch == quote:
+                quote = ""
+            i += 1
+            continue
+        if ch == "\\" and i + 1 < n:
+            i += 2
+            continue
+        if ch in "\"'":
+            quote = ch
+            start = i
+        i += 1
+    if quote and start >= 0:
+        return cmd[:start]
+    return cmd
+
+
+def _drop_unclosed_heredoc(cmd: str) -> str:
+    """A flattened activity row has no newline, so a heredoc body sits on the command line.
+
+    The shell reads that body as data until the terminator. When the stored row was cut before
+    the terminator, the body must not be read as further commands."""
+    match = re.search(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1", cmd)
+    if not match:
+        return cmd
+    word = match.group(2)
+    rest = cmd[match.end():]
+    if re.search(r"(?:^|\s)" + re.escape(word) + r"(?:\s|$)", rest):
+        return cmd
+    return cmd[:match.start()]
+
+
 def _bash(cmd: str, project: str, home: str) -> Set[str]:
     found: Set[str] = set()
+    cmd = _drop_unclosed_heredoc(_drop_unclosed_quote(cmd))
     segs = shellparse.segments(cmd)
     programs = {s.program for s in segs}
     has_fetch = bool(programs & {"curl", "wget"})
@@ -440,10 +487,29 @@ def _bash(cmd: str, project: str, home: str) -> Set[str]:
         if _sql_destructive(text):
             found.add("sql_destructive")
 
+    cwd = ""
     for seg in segs:
         p, a = seg.program, seg.args
+        if p == "cd":
+            arg = next((x for x in a if not x.startswith("-")), "")
+            if arg.startswith("/"):
+                cwd = os.path.normpath(arg)
+            elif arg and cwd and not arg.startswith(("~", "$", "`")):
+                cwd = os.path.normpath(os.path.join(cwd, arg))
+            else:
+                cwd = ""
+            continue
         pos = positional(a)
         sf = short_flags(a)
+        if p == "rm" and cwd and _is_temp(cwd + "/"):
+            joined = []
+            for x in a:
+                if x.startswith(("-", "/", "~", "$", "`")) or x in ("/", "~", "*", ".*"):
+                    joined.append(x)
+                else:
+                    joined.append(cwd.rstrip("/") + "/" + x)
+            seg = Segment(program="rm", args=joined, redirects=seg.redirects, raw=seg.raw)
+            a = seg.args
         if _has_sudo(seg) or (p == "su" and "c" in sf):
             found.add("sudo")
         if p == "rm":

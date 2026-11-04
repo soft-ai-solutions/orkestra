@@ -104,6 +104,21 @@ class TestGitGuard(unittest.TestCase):
         self.assertAllowed("git merge main", grants=["sync"])
         self.assertAllowed("git tag v1.2", grants=["tag"])
         self.assertDenied("git commit --amend", grants=["commit"])
+
+    def test_new_repo_bootstrap_needs_autopilot_or_github_write(self):
+        # Workspace autopilot rule: a NEW project is published as a private repo by one visible command. The guard
+        # decides on that command (the tool runs git/gh itself), so the dry run is free and --yes needs a grant.
+        tool = "node ~/Projects/.cursor/github-bootstrap/new-private-repo.mjs --project hexmora"
+        self.assertAllowed(tool)                                                    # plan only
+        self.assertDenied(tool + " --yes")
+        self.assertDenied("cd ~/Projects && " + tool + " --yes --description 'x'", grants=["commit", "push"])
+        self.assertAllowed(tool + " --yes", grants=["repo_bootstrap"])
+        self.assertAllowed(tool + " --yes", grants=["gh_write"])
+        self.assertDenied("~/Projects/.cursor/github-bootstrap/new-private-repo.mjs --project x --yes")
+        # the grant opens only this tool: everything else keeps its own grant
+        self.assertDenied("git push", grants=["repo_bootstrap"])
+        self.assertDenied("gh repo create x --private", grants=["repo_bootstrap"])
+        self.assertDenied("git commit -m x", grants=["repo_bootstrap"])
         self.assertAllowed("git commit --amend --no-edit", grants=["commit", "amend"])
 
     def test_always_forbidden(self):

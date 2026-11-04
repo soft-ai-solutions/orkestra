@@ -792,10 +792,27 @@ GRANT_HINT = {
 }
 
 
+REPO_BOOTSTRAP_TOOL = "new-private-repo.mjs"
+
+
+def _repo_bootstrap_call(seg: sp.Segment) -> bool:
+    """`node …/new-private-repo.mjs …` or the script run directly: one command that creates a private repo and pushes
+    (workspace autopilot rule). It runs git and gh itself, so this is where the guard decides."""
+    if seg.program.endswith(REPO_BOOTSTRAP_TOOL):
+        return True
+    return seg.program in ("node", "nodejs") and any(a.endswith(REPO_BOOTSTRAP_TOOL) for a in seg.args[:3])
+
+
 def git_guard(event: Dict[str, Any], segs: List[sp.Segment], grants: Set[str]) -> Decision:
     ctx = dict(event.get("_git_ctx") or {})
     ctx.setdefault("bound", bool(event.get("_bound")))
     for seg in segs:
+        if _repo_bootstrap_call(seg):
+            if "--yes" in seg.args and not ({"repo_bootstrap", "gh_write"} & set(grants)):
+                return deny("git", f"`{REPO_BOOTSTRAP_TOOL} --yes` creates a private GitHub repo and pushes main: it needs "
+                                   "an autopilot message (autopilot / sormadan / firatkocabay emrediyor ...) or an explicit "
+                                   "GitHub-write ask in the CURRENT message. Without --yes it only prints the plan.")
+            continue
         call = sp.git_call(seg)
         if call is not None:
             kind, need = _git_subkind(call, ctx)
@@ -1344,7 +1361,7 @@ SCRIPT_STRICT_RE = re.compile(r"open\(|write|unlink|rename|replace|remove|trunca
 SCRIPT_WRITE_RE = re.compile(
     r",\s*['\"](?:[wax]b?\+?|r\+b?|rb\+)['\"]|\bmode\s*=\s*['\"](?:[wax]|r\+)|\.open\(\s*['\"][wax]|os\.open\(|O_WRONLY|O_RDWR|"
     r"O_TRUNC|O_APPEND|O_CREAT|\.write(?:_text|_bytes)?\(|writeFile|appendFile|createWriteStream|copyFile|cpSync|"
-    r"binwrite|\bunlink\b|\brename\b|os\.replace|os\.remove|shutil\.|rmtree|rmSync|\btruncate\b|json\.dump\(|"
+    r"binwrite|\bunlink\b|\brename\b|os\.replace|os\.remove|shutil\.|rmtree|rmSync|\btruncate\b|json\.dump(?!s)\(|"
     r"print\([^\n]*\bfile\s*=|['\"]\s*>{1,2}\s*['\"]|>\s*\S*\.orkestra/runs")
 
 
@@ -1508,6 +1525,39 @@ def _introspects(seg: sp.Segment) -> bool:
     return True
 
 
+_LOOKUP_RE = re.compile(r"getfile\s*\(|__file__|__path__")
+# Importing the library to forge an approval or to drive a hook stays refused. Printing where the
+# package lives does not call any of those.
+_FORGE_RE = re.compile(
+    r"record_|cursor_hook|dispatch\.py|\bdispatch\b|hookmain|pre_tool_decision|"
+    r"beforeSubmitPrompt|UserPromptSubmit|subprocess|os\.system|\beval\s*\(|\bexec\s*\(|"
+    r"__import__|importlib|sys\.path|write_text|write_bytes|\.write\s*\(|\bopen\s*\(")
+
+
+def _library_lookup_only(full: str) -> bool:
+    """True when the command only prints where orkestra's library lives.
+
+    A bare `import orkestra_core` stays refused: that is the shape that can call the library next.
+    `inspect.getfile` / `__file__` with none of the forging names is a path lookup."""
+    if "<<" in full or not _LOOKUP_RE.search(full):
+        return False
+    text = _strip_shell_comments(full)
+    return not _FORGE_RE.search(text)
+
+
+def _path_replace(raw: str) -> bool:
+    """`Path(...).replace(dest)` and `os.replace` move a file. `text.replace` and `.read().replace` do not."""
+    if re.search(r"\bos\.replace\s*\(", raw):
+        return True
+    for match in re.finditer(r"\.replace\s*\(", raw):
+        before = raw[max(0, match.start() - 80):match.start()]
+        if re.search(r"\.read\(\)\s*$", before) or re.search(r"""['\"]\s*$""", before):
+            continue
+        if re.search(r"Path\s*\(", before):
+            return True
+    return False
+
+
 def _names_internals_and_acts(full: str, segs: List[sp.Segment]) -> bool:
     """The command text names orkestra's internals and does more than read.
 
@@ -1526,6 +1576,8 @@ def _names_internals_and_acts(full: str, segs: List[sp.Segment]) -> bool:
         if any(op.strip("&0123456789").startswith(">") and not t.startswith("/dev/") for op, t in seg.redirects):
             return True
         if INTERPRETER_RE.match(seg.program or "") or seg.program in RUNNER_PROGRAMS:
+            if _library_lookup_only(full):
+                continue
             return True
         if _writes(seg):
             return True
@@ -1566,6 +1618,8 @@ def _calls_hook_entry(seg: sp.Segment, cwd: str, raw_program: str = "") -> bool:
     args = list(seg.args)
     for i, a in enumerate(args):
         if a in ("-c", "-e", "--eval", "-m") and i + 1 < len(args) and _hook_code(args[i + 1]):
+            if _library_lookup_only(args[i + 1]):
+                continue
             return True
         if not a.startswith("-") and _is_orkestra_hook(a, cwd):
             return True
@@ -1573,15 +1627,16 @@ def _calls_hook_entry(seg: sp.Segment, cwd: str, raw_program: str = "") -> bool:
 
 
 def _script_writes_run_state(raw: str) -> bool:
-    """True when a script would change `.orkestra/runs`, or when it opens CLI-owned state.
+    """True when a script would change `.orkestra/runs`.
 
-    Evidence logs, gate files and snapshots may be opened and printed. `state.json`, `approval.json` and
-    `agents.json` stay on the strict test, so `open()` and `Path.replace()` of those files are refused.
-    A write mode, `.write()`, `json.dump`, unlink, or a path that climbs out with `..` still counts."""
+    Reading evidence, activity, gates, snapshots, and the state files is fine. A write mode, `.write()`,
+    `json.dump` (not `json.dumps`), unlink, `Path.replace`, or a path that climbs out with `..` still counts."""
     mentions = RUN_MENTION_RE.findall(raw)
     cleaned = re.sub(r"&?>&?\s*(?:/dev/null\b|\d\b)", " ", raw)
-    if not mentions or any(".." in m or RUN_PRIVATE_RE.search(m) for m in mentions):
+    if not mentions or any(".." in m for m in mentions):
         return bool(SCRIPT_STRICT_RE.search(cleaned))
+    if any(RUN_PRIVATE_RE.search(m) for m in mentions):
+        return bool(SCRIPT_WRITE_RE.search(cleaned) or _path_replace(cleaned))
     if all(".orkestra/runs" in m.lower() for m in mentions):
         return bool(SCRIPT_WRITE_RE.search(cleaned))
     return bool(SCRIPT_STRICT_RE.search(cleaned))

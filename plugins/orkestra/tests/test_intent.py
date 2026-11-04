@@ -156,6 +156,24 @@ class TestIntent(unittest.TestCase):
                 self.assertFalse(deploy_requested(text))
                 self.assertNotIn("deploy", prompt_grants(text))
 
+    def test_autopilot_words_grant_only_the_new_repo_bootstrap(self):
+        from orkestra_core.intent import autopilot_requested, prompt_grants
+        yes = ["lütfen tamamen autopilot modda yap", "Otomatik pilot: hexmora'yı bitir", "sormadan hallet",
+               "bana sorma, sen karar ver", "tam yetki sende", "tüm yetkiyi verdim", "firatkocabay emrediyor: pomi'yi düzelt",
+               "Fırat Kocabay emrediyor! testleri koş", "FiratKocabay Emrediyor"]
+        no = ["autopilotu nasıl kapatırım", "what does the bootstrap tool do?", "kocabay emrediyor",
+              "firat emrediyor", "sor bana önce", "bu iş için yetki yok"]
+        for text in yes:
+            with self.subTest(text=text):
+                self.assertTrue(autopilot_requested(text))
+                self.assertIn("repo_bootstrap", prompt_grants(text))
+                self.assertNotIn("push", prompt_grants(text))          # autopilot alone never grants a plain push
+                self.assertNotIn("commit", prompt_grants(text))
+        for text in no:
+            with self.subTest(text=text):
+                self.assertFalse(autopilot_requested(text))
+                self.assertNotIn("repo_bootstrap", prompt_grants(text))
+
     def test_a_request_to_run_the_deploy_command_lets_wrangler_deploy(self):
         import tempfile
         from pathlib import Path

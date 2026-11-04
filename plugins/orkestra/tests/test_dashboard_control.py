@@ -310,6 +310,16 @@ class TestRiskData(unittest.TestCase):
             risks_tr, _ = MON._risks(self.rows(), "/w/demo", "/Users/me")
         self.assertEqual(risks_tr[1]["label"], "secrets korumasının reddettiği işlem")
 
+    def test_a_read_the_rules_allow_is_not_listed_as_blocked(self):
+        read = "python3 -c \"print(open('.orkestra/runs/001-x/evidence/T001-red-1.log').read())\""
+        forge = "python3 -c \"import orkestra_core\""
+        rows = [row(1, "deny", "[internals] old refusal", cmd=read),
+                row(2, "deny", "[internals] forge", cmd=forge)]
+        risks, counts = MON._risks(rows, "/w/demo", "/Users/me")
+        self.assertEqual(counts["blocked"], 1)
+        self.assertEqual(len(risks), 1)
+        self.assertIn("import orkestra_core", risks[0]["what"])
+
     def test_the_list_is_capped_but_the_counts_cover_every_row(self):
         rows = [row(i, "tool", f"rm -rf ~/dir{i}") for i in range(MON.RISK_KEEP + 15)]
         risks, counts = MON._risks(rows)

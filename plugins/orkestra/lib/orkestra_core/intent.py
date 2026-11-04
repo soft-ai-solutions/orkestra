@@ -225,11 +225,24 @@ def control_grants(prompt: str) -> List[str]:
     return sorted(cats)
 
 
+# Workspace autopilot trigger (~/Projects/.cursor/rules/03-autopilot-no-questions.mdc) and the owner's order phrase.
+_AUTOPILOT = _LazyRe(r"(?<![\w-])(autopilot(?!u\s+(nasıl|kapat))|otomatik\s+pilot|sormadan|bana\s+sorma(?!m)|tam\s+yetki|"
+                     r"tüm\s+yetkiyi\s+verdim)(?![\w-])|\bf[iı]rat\s*kocabay\s+emrediyor\b", re.I)
+
+
+def autopilot_requested(prompt: str) -> bool:
+    """Whether the message switches on the workspace autopilot (or carries the owner's order phrase)."""
+    return bool(_AUTOPILOT.search(_lower(prompt)))
+
+
 def prompt_grants(prompt: str) -> List[str]:
-    """Everything the user's message permits: git, run-control, and an explicit deploy ask."""
+    """Everything the user's message permits: git, run-control, an explicit deploy ask, and in autopilot the one
+    publish of a NEW project as a private repo (new-private-repo.mjs --yes; it refuses every project that is not new)."""
     cats = set(git_grants(prompt)) | set(control_grants(prompt))
     if deploy_requested(prompt):
         cats.add("deploy")
+    if autopilot_requested(prompt):
+        cats.add("repo_bootstrap")
     return sorted(cats)
 
 

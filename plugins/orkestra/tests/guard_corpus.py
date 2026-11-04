@@ -729,6 +729,8 @@ BASH_MULTI = [
     "grep -rn \"cat .env\" docs",
     "man git-push",
     "echo \"check {P}/.env is gitignored\"",
+    "node ~/Projects/.cursor/github-bootstrap/new-private-repo.mjs --project {P}",
+    "node ~/Projects/.cursor/github-bootstrap/new-private-repo.mjs --project {P} --yes",
 ]
 
 WRAPPERS = (

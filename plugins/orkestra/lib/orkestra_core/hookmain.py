@@ -270,6 +270,27 @@ def _loose_key(args: list) -> str:
     return words[0]
 
 
+def take_owner_note(project: Path) -> str:
+    """One owner addendum for the live run. Read once, then the file is renamed so it is not repeated."""
+    src = Path(project) / ".orkestra" / "owner-note.md"
+    if not src.is_file():
+        return ""
+    try:
+        text = src.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    if not text:
+        return ""
+    dest = src.with_name("owner-note.delivered.md")
+    try:
+        if dest.exists():
+            dest.unlink()
+        src.replace(dest)
+    except OSError:
+        return ""
+    return "[orkestra] The owner added this to the current run. Do it in this same run:\n" + text
+
+
 def next_hint(project: Path, st: dict, rows=None) -> str:
     """The deterministic next step for hook messages (cheap: small files only). Empty on any error."""
     try:
@@ -972,9 +993,11 @@ def on_post_tool(ev: dict) -> None:
             activity.record(Path(cur["project"]), cur["run_id"], ev, "end", "✓")
         warnings = apply_markers(ev, sid, text) if "[orkestra:" in text else []
         note = ""
+        extra = ""
         if cur:
             note = tempo.plan_late_note(Path(cur["project"]), cur["state"], cur["run_id"])
-        lines = [x for x in ("\n".join(dict.fromkeys(warnings)), note) if x]
+            extra = take_owner_note(Path(cur["project"]))
+        lines = [x for x in ("\n".join(dict.fromkeys(warnings)), note, extra) if x]
         if lines:                                # ONE JSON object per hook call (two would be unparseable)
             context_out("PostToolUse", "\n".join(lines))
         return
@@ -986,6 +1009,9 @@ def on_post_tool(ev: dict) -> None:
         cwd = ev.get("cwd") or str(project)
         for p in guards._tool_paths(ev):
             snapshot.record_touch(project, paths.run_dir(project, b["run_id"]), resolve_path(p, cwd))
+        added = take_owner_note(project)
+        if added:
+            context_out("PostToolUse", added)
         return
     if tool == "AskUserQuestion":
         activity.record(project, b["run_id"], ev, "answer",
@@ -1010,8 +1036,10 @@ def on_post_tool(ev: dict) -> None:
             runs.set_status(project, b["run_id"], "active", "user answered")
     if tool in ("Read", "Grep"):
         note = tempo.plan_late_note(project, b["state"], b["run_id"])
-        if note:
-            context_out("PostToolUse", note)
+        added = take_owner_note(project)
+        lines = [x for x in (note, added) if x]
+        if lines:
+            context_out("PostToolUse", "\n".join(lines))
 
 
 def agent_result_line(ev: dict) -> str:

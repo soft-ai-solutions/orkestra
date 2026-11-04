@@ -218,6 +218,7 @@ POSITIVE = [
 
 NEGATIVE = [
     ("Bash", "rm -rf /tmp/scratch"),                       # clearing a temp scratch folder is housekeeping
+    ("Bash", "cd /tmp && rm -rf tinko-adv"),               # the same folder, after cd
     ("Bash", "rm -rf /private/tmp/rp023-apkx && mkdir -p /private/tmp/rp023-apkx"),
     ("Bash", 'grep -rn "rm -rf" .'),
     ("Bash", 'echo "git push --force"'),
@@ -390,6 +391,14 @@ class RiskRobustness(unittest.TestCase):
 
     def test_unbalanced_quotes_still_detected(self):
         self.assertEqual(got("Bash", 'git push -f origin "main'), "git_force_push")
+
+    def test_a_quoted_script_cut_off_mid_quote_is_not_a_deploy(self):
+        cut = ("orkestra evidence FR-011 -p tahric -- python3 -c 'import json; "
+               "expected=\"npm run build && wrangler deploy --config wrangler.workers.jsonc\"")
+        self.assertIsNone(risk.classify("Bash", cut, PROJ, HOME))
+        self.assertEqual(got("Bash", "npx wrangler deploy"), "deploy")
+        note = "cat > evidence.log << 'EOF' POST-DEPLOY command: npx wrangler deploy"
+        self.assertIsNone(risk.classify("Bash", note, PROJ, HOME))
 
     def test_cpu_budget_5000_mixed_calls(self):
         base = [t for t in POSITIVE] + [(t, w, None) for t, w in NEGATIVE]

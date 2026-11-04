@@ -527,6 +527,24 @@ RISK_TOOLS = frozenset({"Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "R
 RISK_KEEP = 40                       # newest risky actions per run in a view (the counts cover every row read)
 
 
+def _refusal_stands(cmd: str, project: str) -> bool:
+    """A past refusal stays on the risk list only while the same command is still refused.
+
+    The list is rebuilt from the activity log. A read the rules now allow must not keep wearing
+    the blocked chip from the older rule. No project, or a check that fails, keeps the row."""
+    if not cmd or not project:
+        return True
+    try:
+        from . import guards
+        from .paths import DEFAULT_GLOBAL_CONFIG
+        event = {"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": project}
+        binding = {"project": project, "run_id": "radar",
+                   "state": {"phase": "implement", "status": "active", "approved": {"deps": []}}}
+        return bool(guards.pre_tool_decision(event, DEFAULT_GLOBAL_CONFIG, binding, ()).denied)
+    except Exception:
+        return True
+
+
 def _row_risk(row: Dict[str, Any], project: str = "", home: str = "") -> Optional[Dict[str, str]]:
     """risk.classify of one activity row: a tool call's own text, or the refused call a deny row carries."""
     kind, tool = row.get("kind"), str(row.get("tool") or "")
@@ -550,6 +568,10 @@ def _risks(rows: List[Dict[str, Any]], project: str = "", home: str = "") -> Tup
         if kind == "deny":
             guard, reason = _deny_parts(str(row.get("what") or ""))
             if hit is None and guard not in DANGER_GUARDS:
+                continue
+            # a refusal the current rules allow is not a risk, whatever the old category was
+            if hit is None and str(row.get("cmd") or "") \
+                    and not _refusal_stands(str(row.get("cmd") or ""), project):
                 continue
             if hit is None:
                 hit = {"level": "medium", "code": "guard", "label": i18n.t("monitor.risk_guard", guard=guard)}

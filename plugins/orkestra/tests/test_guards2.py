@@ -134,6 +134,13 @@ class TestParserFixes(unittest.TestCase):
                  "print(sorted(d))\"")
         self.assertFalse(decide(bash(gates), b).denied)
         self.assertTrue(decide(bash("python3 -c \"import orkestra_core\""), b).denied)
+        locate = ("python3 -c \"import orkestra_core,inspect,os; "
+                  "print(os.path.dirname(inspect.getfile(orkestra_core)))\"")
+        self.assertFalse(decide(bash(locate), b).denied, locate)
+        file_of = "python3 -c \"import orkestra_core.evidence as e; print(e.__file__)\""
+        self.assertFalse(decide(bash(file_of), b).denied, file_of)
+        forge = "python3 -c \"import orkestra_core.runs as r; r.record_approval(1)\""
+        self.assertTrue(decide(bash(forge), b).denied, forge)
 
     def test_rm_of_a_literal_temp_variable_is_allowed(self):
         b = binding()

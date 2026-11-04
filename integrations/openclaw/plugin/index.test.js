@@ -457,6 +457,26 @@ test("no project in the message: the question lists the folders and a typed name
   assert.equal(calls.filter((a) => a[2] === "start").length, 1);
 });
 
+test("machineTasks=agent: an owner order without a project is a machine task for the agent; a project still starts the owner job", async () => {
+  lang("en");
+  const script = {
+    ensure: () => ok({ state: "running" }),
+    projects: () => ok(OWNER_PROJECTS),
+    start: (argv) => ok({ id: JOB, project: argv[3], owner: argv.includes("--owner") }),
+  };
+  const { hooks, calls } = harness(script, { config: { ownerCommand: { ...OWNER, machineTasks: "agent" } } });
+  // no project named: the message reaches the agent untouched (its owner skill runs it in autopilot), nothing starts
+  assert.equal(await hooks.before_dispatch(dm("open sesame now: clean the Downloads folder of old dmg files"), {}), undefined);
+  assert.equal(calls.filter((a) => a[2] === "start").length, 0);
+  // a project named: unchanged owner job
+  const res = await hooks.before_dispatch(dm("open sesame now fix the pomi shop"), {});
+  assert.match(res.text, /Owner command started: \[pomi\]/);
+  // two projects named: still asked once (a machine task never guesses between projects)
+  assert.match((await hooks.before_dispatch(dm("open sesame now make tinko look like pomi"), {})).text, /a\) tinko\nb\) pomi/);
+  // somebody else's account: nothing, as before
+  assert.equal(await hooks.before_dispatch(dm("open sesame now: clean Downloads", { senderId: "999" }), {}), undefined);
+});
+
 test("an owner command without a task, or with Orkestra down, says so and starts nothing", async () => {
   lang("en");
   let h = ownerHarness();

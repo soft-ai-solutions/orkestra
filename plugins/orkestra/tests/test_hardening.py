@@ -66,7 +66,7 @@ class TestRedirectOnlyCommands(unittest.TestCase):
 
 
 class TestScriptsAndRunState(unittest.TestCase):
-    """4 — a script may read evidence/activity logs; machine state keeps the strict 1.3.0 test."""
+    """4 — a script may read run files, including state. Writing them stays refused."""
 
     R_ = ".orkestra/runs/001-x"
     DENY = [
@@ -79,19 +79,20 @@ class TestScriptsAndRunState(unittest.TestCase):
         f"ruby -e 'IO.binwrite(\"{R_}/state.json\", \"{{}}\")'",
         f"python3 -c \"d='{R_}/evidence'; open(d+'/../approval.json','w').write('{{}}')\"",
         f"node -e \"require('fs').copyFileSync('/tmp/a.json', '{R_}/agents.json')\"",
-        f"python3 -c \"import json; print(json.load(open('{R_}/state.json'))['phase'])\"",     # state: use the CLI
     ]
     ALLOW = [
         f"python3 -c \"print(open('{R_}/evidence/T001-red-1.log').read()[-400:])\" 2>/dev/null",
         f"python3 -c \"print(open('{R_}/evidence/T001-green-1.log').read().replace('a', 'b'))\"",
         f"python3 -c \"import json; [print(json.loads(l)['kind']) for l in open('{R_}/activity.jsonl')]\"",
+        f"python3 -c \"import json; print(json.load(open('{R_}/state.json'))['phase'])\"",
+        f"python3 -c \"import json; print(json.dumps(json.load(open('{R_}/state.json'))))\"",
     ]
 
     def test_writes_are_denied_however_they_are_spelled(self):
         for cmd in self.DENY:
             d = decide(bash(cmd), binding())
             self.assertTrue(d.denied and d.guard == "internals", cmd)
-        self.assertIn("orkestra status --json", decide(bash(self.DENY[-1]), binding()).reason)
+        self.assertIn("orkestra status --json", decide(bash(self.DENY[0]), binding()).reason)
 
     def test_reading_logs_is_allowed(self):
         for cmd in self.ALLOW:

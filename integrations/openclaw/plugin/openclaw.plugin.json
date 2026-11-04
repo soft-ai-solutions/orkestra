@@ -57,6 +57,14 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 12
+          },
+          "machineTasks": {
+            "type": "string",
+            "enum": [
+              "ask",
+              "agent"
+            ],
+            "description": "An owner order that names no project: ask which project (default) or hand it to the OpenClaw agent as a machine task."
           }
         }
       },

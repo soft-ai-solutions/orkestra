@@ -180,7 +180,11 @@ export default definePluginEntry({
       };
     }
 
-    /** An owner command (passphrase already checked): bring Orkestra up, find the project, start the owner job. */
+    /**
+     * An owner command (passphrase already checked): bring Orkestra up, find the project, start the owner job.
+     * Returns null when the order names no project and `ownerCommand.machineTasks` is "agent": then it is a task on
+     * this machine for the OpenClaw agent, which gets the message untouched (its owner skill runs it in autopilot).
+     */
     async function ownerCommand(request) {
       if (String(request ?? "").trim().length < 3) {
         return t("owner.empty");
@@ -194,6 +198,9 @@ export default definePluginEntry({
         ? listed.body.projects.map((p) => (typeof p === "string" ? p : p?.name)).filter(Boolean)
         : [];
       const hits = mentionedProjects(request, names).slice(0, LETTERS.length);
+      if (hits.length === 0 && names.length && owner.machineTasks === "agent") {
+        return null;                          // no project named: a machine task (a failed listing still asks)
+      }
       if (hits.length === 1) {
         return (await startRun(hits[0], request, undefined, true)).text;
       }
@@ -415,7 +422,11 @@ export default definePluginEntry({
         (replyToId ? (messages[replyToId] ?? null) : null);
       const command = owner ? matchOwnerPhrase(content, owner) : null;
       if (command && !ref) {
-        return { handled: true, text: await ownerCommand(command.request) };
+        const text = await ownerCommand(command.request);
+        if (text === null) {
+          return;                           // a machine task: the agent handles the owner's order
+        }
+        return { handled: true, text };
       }
       if (command) {
         content = command.request;          // a reply to a job: the passphrase is never forwarded
