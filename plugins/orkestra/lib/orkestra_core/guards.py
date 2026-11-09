@@ -803,6 +803,22 @@ def _repo_bootstrap_call(seg: sp.Segment) -> bool:
     return seg.program in ("node", "nodejs") and any(a.endswith(REPO_BOOTSTRAP_TOOL) for a in seg.args[:3])
 
 
+def _orkestra_office_block(event: Dict[str, Any]):
+    """Deny commit and push inside the Orkestra tree on weekday 09:00-18:00 GMT+3. Other repos are untouched.
+    `_clock` is the injected test clock; production reads the time here, never in the tests."""
+    from datetime import datetime
+    from orkestra_core.officehours import GMT3, REASON, commit_push_closed, in_orkestra_checkout
+    cwd = event.get("cwd") or os.getcwd()
+    if not in_orkestra_checkout(str(cwd)):
+        return None
+    moment = event.get("_clock")
+    if not isinstance(moment, datetime):
+        moment = datetime.now(GMT3)
+    if commit_push_closed(moment):
+        return deny("git", REASON)
+    return None
+
+
 def git_guard(event: Dict[str, Any], segs: List[sp.Segment], grants: Set[str]) -> Decision:
     ctx = dict(event.get("_git_ctx") or {})
     ctx.setdefault("bound", bool(event.get("_bound")))
@@ -817,6 +833,10 @@ def git_guard(event: Dict[str, Any], segs: List[sp.Segment], grants: Set[str]) -
         if call is not None:
             kind, need = _git_subkind(call, ctx)
             label = f"git {call.sub}".strip()
+            if kind != "read" and call.sub in ("commit", "push"):
+                closed = _orkestra_office_block(event)
+                if closed is not None:
+                    return closed
         elif seg.program == "gh":
             kind, need = _gh_subkind(seg)
             label = "gh " + " ".join(seg.args[:2])

@@ -10,6 +10,8 @@ EN: Dict[str, str] = {
                         "process if it is stuck.",
     "common.lock_holder": "pid {pid} ({cmd}) for {held} s",
     "common.lock_holder_unknown": "another process",
+    "common.office_hours": "Orkestra refuses commit and push on weekdays from 09:00 to 18:00 GMT+3. "
+                           "Try again at 18:00 or later, or on Saturday or Sunday.",
 }
 
 TR: Dict[str, str] = {
@@ -18,4 +20,6 @@ TR: Dict[str, str] = {
                         "işlemi durdurun.",
     "common.lock_holder": "pid {pid} ({cmd}), {held} sn",
     "common.lock_holder_unknown": "başka bir işlem",
+    "common.office_hours": "Orkestra hafta içi saat 09:00 ile 18:00 GMT+3 arasında commit ve push kabul etmez. "
+                           "18:00 ve sonrasında ya da cumartesi veya pazar yeniden deneyin.",
 }

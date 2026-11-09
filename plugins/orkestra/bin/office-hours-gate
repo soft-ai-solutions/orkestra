@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+"""Refuse git commit and git push in this checkout during the weekday GMT+3 window.
+
+The machine hook directory calls this only when the file exists, which is the Orkestra tree.
+Exit 0 outside the window. Exit 1 inside it, with one sentence on stderr.
+"""
+from __future__ import annotations
+
+import os
+import sys
+from datetime import datetime
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent / "lib"))
+
+from orkestra_core import i18n  # noqa: E402
+from orkestra_core.officehours import GMT3, commit_push_closed  # noqa: E402
+
+
+def main() -> int:
+    if not commit_push_closed(datetime.now(GMT3)):
+        return 0
+    sys.stderr.write(i18n.t("common.office_hours") + "\n")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

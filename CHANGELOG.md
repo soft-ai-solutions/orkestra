@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Weekday commit and push hours in this repository
+- **Orkestra checkout only:** `git commit` and `git push` are refused on Monday to Friday from 09:00 until 18:00 GMT+3.
+  18:00, later the same evening, and Saturday and Sunday stay open. Other projects are unchanged. The clock is fixed
+  GMT+3. `plugins/orkestra/bin/office-hours-gate` is what the machine git hooks call.
+
 Orkestra now serves people in English and Turkish (English is the default), runs the same on macOS, Linux and Windows
 with Python 3.9 to 3.14, and its repository documentation is available in both languages. Entries up to 1.6.0 below
 were written in Turkish and are kept as they were.
