@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional
 
 from . import activity as A
 from . import engines as EN
+from . import fallback as FB
 from . import paths
 from . import state as ST
 from . import tempo as T
@@ -345,15 +346,20 @@ def _spawn_resume(v: Dict[str, Any], cfg: Dict[str, Any], session: str, attempt:
         spec = EN.headless_command("copilot", binary, session, EN.resume_prompt("copilot", project.name), False,
                                    copilot_cfg)
     elif engine == "claude":
-        binary = _claude_bin()
+        # the account that holds the session (engine.chain): another account answers "No conversation found"
+        prof = FB.profile_for_session(FB.chain(cfg), session)
+        binary = (FB.resolve_bin(prof) if prof else None) or _claude_bin()
         if not binary:
             return "claude CLI not found"
         spec = EN.headless_command("claude", binary, session, EN.resume_prompt("claude", project.name), False,
                                    {"permission_mode": h.get("permission_mode"), "max_turns": h.get("max_turns"),
-                                    "max_budget_usd": h.get("max_budget_usd")})
+                                    "max_budget_usd": h.get("max_budget_usd"),
+                                    "extra_args": FB.with_model([], str(prof.get("model") or "")) if prof else []})
     else:
         return f"unsupported engine: {engine}"
     env = EN.child_env(engine)
+    if engine == "claude":
+        env = FB.apply_env(prof, env) if prof else env
     log = paths.run_dir(project, v["run_id"]) / f"watchdog-resume-{attempt}.log"
     try:
         with open(log, "w", encoding="utf-8") as fh:        # the child keeps its own copy of the descriptor

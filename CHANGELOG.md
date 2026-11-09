@@ -6,6 +6,17 @@ Orkestra now serves people in English and Turkish (English is the default), runs
 with Python 3.9 to 3.14, and its repository documentation is available in both languages. Entries up to 1.6.0 below
 were written in Turkish and are kept as they were.
 
+### A stale Claude Code plugin copy is named at session start
+- **SessionStart checks the copy it runs from:** Claude Code runs hooks from its cache
+  (`plugins/cache/<marketplace>/orkestra/<version>`) and refreshes it only on `claude plugin update`, so guard fixes
+  made in a local checkout could stay inactive for weeks without a word. The new `orkestra_core.plugincopy` compares the
+  cached copy's code (hooks and library) with the directory marketplace it came from and, only when they differ, adds
+  one line of context with the exact repair command for every registered install scope (user first, then
+  `(cd <project> && claude plugin update orkestra@<marketplace> -s project)`). A current copy adds nothing. Stdlib,
+  no hashing, never raises, so the hook stays lean.
+- **`orkestra doctor`** lists each cached copy once, even when user and project scopes point at the same one, and uses
+  the same comparison as the hook.
+
 ### Telegram owner commands and `/ide`
 - **Owner command:** a Telegram message with the owner's passphrase (stored only as a salted SHA-256 in the plugin
   config, matched by the plugin, never shown to the agent) starts Orkestra when it is down, finds the project in the

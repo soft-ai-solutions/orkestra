@@ -1,7 +1,7 @@
 {
   "id": "orkestra-bridge",
   "name": "Orkestra bridge",
-  "description": "Telegram → orkestra: /run (/yap), /runs (/durum), /cancel (/iptal), /ide, plain-language requests through the orkestra_run tool, owner commands (passphrase), reply-to-answer and job notifications.",
+  "description": "Telegram → orkestra: /run (/yap), /runs (/durum), /cancel (/iptal), /ide, plain-language requests through the orkestra_run tool, owner commands (passphrase), reply-to-answer, job notifications, autopilot owner mode (voice orders, attachments, queue, progress notes).",
   "activation": {
     "onStartup": true
   },
@@ -75,6 +75,25 @@
           "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._-]{0,59}$"
         },
         "maxItems": 8
+      },
+      "autopilotAll": {
+        "type": "boolean",
+        "description": "Autopilot owner mode: every request of the allowlisted owner becomes an owner job (no questions back), a busy project queues the request, and media sent with a request reaches the job as files."
+      },
+      "progressMinutes": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1440,
+        "description": "Minutes between progress notes on open Telegram runs (only when something changed); 0 = off."
+      },
+      "attachmentRoots": {
+        "type": "array",
+        "maxItems": 8,
+        "items": {
+          "type": "string",
+          "pattern": "^/"
+        },
+        "description": "Folders attachments may come from (default: the OpenClaw media folder and agent workspace)."
       }
     }
   }

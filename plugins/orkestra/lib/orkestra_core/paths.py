@@ -28,7 +28,9 @@ DEFAULT_GLOBAL_CONFIG: Dict[str, Any] = {
     "tempo": {"stop_while_agents": True, "task_review_required": True, "max_dispatches": 3},   # M/L: `task done` needs a PASS review;   # the main turn may end while background subagents are still running
     # which agent drives a run started without an explicit choice (bridge, `orkestra run`): claude | cursor.
     # cursor.global_guards: outside a run, apply the every-session guards (git, secrets, store) to Cursor chats too.
-    "engine": {"default": "claude", "claude": {"bin": "", "interactive_args": []},
+    # chain: ordered fallback profiles for bridge/watchdog turns (see fallback.py); [] = the single default engine
+    "engine": {"default": "claude", "chain": [], "chain_cooldown_minutes": 60,
+               "claude": {"bin": "", "interactive_args": []},
                                     "cursor": {"bin": "", "model": "", "interactive_args": [], "global_guards": False,
                                                "hooks_carry_agent_env": False},
                                     "copilot": {"bin": "", "model": "gpt-6-luna", "reasoning_effort": "max",

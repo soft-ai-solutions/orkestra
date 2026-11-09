@@ -59,7 +59,7 @@ from typing import Any, Dict, List, Optional
 HERE = Path(__file__).resolve().parent
 PLUGIN = HERE.parent / "plugins" / "orkestra"
 sys.path.insert(0, str(PLUGIN / "lib"))
-from orkestra_core import engines as EN, fastwatch as FW, i18n, intent as INTENT, paths as OP, runs as R  # noqa: E402
+from orkestra_core import engines as EN, fallback as FB, fastwatch as FW, i18n, intent as INTENT, paths as OP, runs as R  # noqa: E402
 from orkestra_core.i18n import t  # noqa: E402
 from orkestra_core.state import OrkestraError, project_active_run  # noqa: E402
 ORKESTRA_BIN = PLUGIN / "bin" / "orkestra"
@@ -261,6 +261,21 @@ def cursor_bin(cfg: Dict[str, Any]) -> Optional[str]:
     return EN.binary("cursor", orkestra_cfg(), hint=cfg.get("cursor_bin") or None)
 
 
+def engine_chain() -> List[Dict[str, Any]]:
+    """~/.orkestra/config.json → engine.chain (fallback.py). [] = single-engine behaviour."""
+    return FB.chain(OP.global_config())
+
+
+def _profile_usable(cfg: Dict[str, Any], project: Path) -> Any:
+    def ok(p: Dict[str, Any]) -> bool:
+        if p["engine"] == "cursor":
+            return not cursor_ready(cfg, project)
+        if p["engine"] == "copilot":
+            return not copilot_ready(cfg)
+        return True
+    return ok
+
+
 def cursor_ready(cfg: Dict[str, Any], project: Optional[Path] = None) -> str:
     """'' when a Cursor job may start, else why not. Without orkestra's hooks in ~/.cursor a Cursor agent would
     run with no guards at all (no approval gate, no git/secret rules) — that is never started."""
@@ -441,11 +456,19 @@ def start_job(cfg: Dict[str, Any], project_name: str, request: str, chat_id: Opt
     request = (request or "").strip()
     if len(request) < 3:
         raise ValueError(t("bridge.job.empty_request"))
+    requested = engine
     if owner:
         if source not in OWNER_SOURCES:
             raise ValueError(t("bridge.job.owner_source", source=source))
         engine = "claude"                   # the owner gets the best model, which only the claude engine selects here
     engine = pick_engine(cfg, engine)
+    profile: Optional[Dict[str, Any]] = None
+    profiles = engine_chain()
+    if profiles and (owner or not requested):   # an explicitly named engine keeps its single-engine path
+        profile = FB.pick(profiles, HOME, usable=_profile_usable(cfg, project))
+        if profile is None:
+            raise ValueError(t("bridge.turn.chain_exhausted"))
+        engine = profile["engine"]
     approval_mode = "manual" if INTENT.manual_approval_requested(request) else "autopilot"
     try:
         copilot_profile = copilot_options(cfg, approval_mode, request) if engine == "copilot" else {}
@@ -469,12 +492,15 @@ def start_job(cfg: Dict[str, Any], project_name: str, request: str, chat_id: Opt
                "approval_mode": approval_mode}
         if owner:
             job["owner"] = True
+        if profile:
+            job["profile"] = profile
         if engine == "copilot":
             _store_copilot_profile(job, copilot_profile)
         save_job(job)
     if engine == "cursor":
         try:        # Cursor hands the chat id out itself (claude takes the uuid above as --session-id)
-            job["session_id"] = EN.new_session("cursor", str(cursor_bin(cfg)), str(project))
+            job["session_id"] = EN.new_session("cursor", str((FB.resolve_bin(profile) if profile else None)
+                                                             or cursor_bin(cfg)), str(project))
         except EN.EngineError as exc:
             job["status"], job["last_message"] = "error", str(exc)
             save_job(job)
@@ -673,7 +699,8 @@ def _prepare_turn(cfg: Dict[str, Any], job: Dict[str, Any], prompt: str, new: bo
             save_job(job)
             notify(cfg, job)
             return None
-        binary = cursor_bin(cfg) or str(cfg.get("cursor_bin") or "agent")
+        prof = job.get("profile") if (job.get("profile") or {}).get("engine") == "cursor" else None
+        binary = (FB.resolve_bin(prof) if prof else None) or cursor_bin(cfg) or str(cfg.get("cursor_bin") or "agent")
         # print mode fires no prompt hook: the hook layer hears the user's words from us (approval, git permission)
         ctx = EN.driver_prompt("cursor", job["session_id"], said or prompt, job["project_path"])
         if ctx is None:     # the hook layer refused to hear us: this bridge was started from inside an agent's shell
@@ -683,7 +710,8 @@ def _prepare_turn(cfg: Dict[str, Any], job: Dict[str, Any], prompt: str, new: bo
             notify(cfg, job)
             return None
         spec = EN.headless_command("cursor", binary, job["session_id"], (ctx + "\n\n" if ctx else "") + prompt, new,
-                                   {"model": cfg.get("cursor_model"), "extra_args": cfg.get("cursor_extra_args")})
+                                   {"model": (prof or {}).get("model") or cfg.get("cursor_model"),
+                                    "extra_args": cfg.get("cursor_extra_args")})
     elif engine == "copilot":
         why = copilot_ready(cfg)
         if why:
@@ -713,17 +741,21 @@ def _prepare_turn(cfg: Dict[str, Any], job: Dict[str, Any], prompt: str, new: bo
             return None
         spec = EN.headless_command("pi", binary, job["session_id"], prompt, new, {})
     else:
-        binary = str(cfg["claude_bin"])
+        prof = job.get("profile") if (job.get("profile") or {}).get("engine") == "claude" else None
+        binary = (FB.resolve_bin(prof) if prof else None) or str(cfg["claude_bin"])
         extra = list(cfg.get("extra_args") or [])
         if job.get("owner"):
             extra += owner_args(cfg)
             from orkestra_core import state as ST
             ST.write_owner_grant(str(job.get("session_id") or ""), str(job["id"]))   # every turn renews it
+        if prof and prof.get("model"):
+            extra = FB.with_model(extra, str(prof["model"]))
         spec = EN.headless_command("claude", binary, job["session_id"], prompt, new,
                                    {"permission_mode": cfg["permission_mode"], "max_turns": cfg["max_turns"],
                                     "extra_args": extra,
                                     "max_budget_usd": (OP.global_config().get("headless") or {}).get("max_budget_usd")})
-    return {"spec": spec, "binary": binary, "engine": engine, "prompt": prompt, "said": said, "new": new}
+    return {"spec": spec, "binary": binary, "engine": engine, "prompt": prompt, "said": said, "new": new,
+            "profile": job.get("profile")}
 
 
 def run_turn(cfg: Dict[str, Any], job: Dict[str, Any], prompt: str, new: bool, said: Optional[str] = None) -> None:
@@ -748,12 +780,78 @@ def resume_now(cfg: Dict[str, Any], job_id: str) -> None:
             _start_turn(cfg, cur, prep)
 
 
+def _failover(cfg: Dict[str, Any], job: Dict[str, Any], prof: Dict[str, Any], why: str, code: Any) -> bool:
+    """The turn ended on a usage limit of `prof`: cool it down and continue the job on the next profile of the chain,
+    on a NEW session (a session cannot move to another account or engine; the Orkestra run in the project can).
+    False = nothing left to move to (the caller tells the user)."""
+    profiles = engine_chain()
+    FB.mark_limited(HOME, prof, FB.cooldown_seconds(OP.global_config()))
+    nxt = FB.pick(profiles, HOME, after=int(prof.get("index", -1)), usable=_profile_usable(cfg, Path(job["project_path"])))
+    if nxt is None:
+        nxt = FB.pick(profiles, HOME, usable=_profile_usable(cfg, Path(job["project_path"])))   # an earlier one reset
+    if nxt is None or nxt.get("name") == prof.get("name"):
+        log(f"job {job['id']} {prof.get('name')} hit a usage limit; no other profile is available")
+        return False
+    if job.get("owner"):
+        from orkestra_core import state as ST
+        ST.clear_owner_grant(str(job.get("session_id") or ""))
+    short = " ".join(str(why).split())[:160]
+    job["profile"], job["engine"] = nxt, nxt["engine"]
+    job.setdefault("failovers", []).append({"at": now(), "from": prof.get("name"), "to": nxt["name"], "why": short})
+    job["turns"][-1]["exit"] = code
+    job["status"] = "running"
+    job["last_message"] = t("bridge.turn.failover", frm=prof.get("name"), why=short, to=nxt["name"])
+    if not _save_unless_cancelled(job):
+        return True
+    log(f"job {job['id']} failover {prof.get('name')} → {nxt['name']} ({short})")
+    notify(cfg, job)
+
+    def go() -> None:
+        try:
+            failover_now(cfg, job["id"])
+        except Exception as exc:            # a Timer thread must not leave the job "running" forever
+            log(f"job {job['id']} failover failed: {exc}")
+            with _lock:
+                cur = load_job(job["id"]) or job
+                if cur.get("status") == "running" and job["id"] not in _procs:
+                    cur["status"] = "awaiting_user"
+                    cur["last_message"] = t("bridge.turn.auto_resume_failed", error=exc)
+                    save_job(cur)
+                    notify(cfg, cur)
+
+    timer = threading.Timer(2.0, go)
+    timer.daemon = True
+    timer.start()
+    return True
+
+
+def failover_now(cfg: Dict[str, Any], job_id: str) -> None:
+    """First turn of a job on its new profile: a fresh session that picks the open run up with /orkestra:resume."""
+    cur = load_job(job_id)
+    if not cur or cur.get("status") != "running" or job_id in _procs:
+        return
+    engine = cur.get("engine") or "claude"
+    if engine == "cursor":
+        prof = cur.get("profile") or {}
+        cur["session_id"] = EN.new_session("cursor", str(FB.resolve_bin(prof) or cursor_bin(cfg)), cur["project_path"])
+    else:
+        cur["session_id"] = str(uuid.uuid4())
+    save_job(cur)
+    prep = _prepare_turn(cfg, cur, EN.resume_prompt(engine, str(cur.get("project") or "")), True, "/orkestra-resume")
+    if prep is None:
+        return
+    with _lock:
+        fresh = load_job(job_id) or cur
+        if fresh.get("status") == "running" and job_id not in _procs:
+            _start_turn(cfg, cur, prep)
+
+
 def _start_turn(cfg: Dict[str, Any], job: Dict[str, Any], prep: Dict[str, Any]) -> None:
     spec, binary, engine, prompt, said, new = (prep[k] for k in ("spec", "binary", "engine", "prompt", "said", "new"))
     job["status"] = "running"
     job["turns"].append({"at": now(), "prompt": (said or prompt)[:500]})
     save_job(job)
-    env = EN.child_env(engine)
+    env = FB.apply_env(prep.get("profile"), EN.child_env(engine))   # the profile's account (CLAUDE_CONFIG_DIR)
     started = now()
     started_ts = time.time()
     try:
@@ -839,6 +937,14 @@ def _start_turn(cfg: Dict[str, Any], job: Dict[str, Any], prep: Dict[str, Any]) 
         message = str(data.get("result") or "") or message
         if data.get("session_id"):
             fresh["session_id"] = data["session_id"]
+        exhausted = False
+        prof = fresh.get("profile")
+        if prof and not reason and (proc.returncode != 0 or data.get("is_error")) \
+                and FB.is_limit_error(message, (err or "")[-2000:]):
+            if _failover(cfg, fresh, prof, message or err or "", proc.returncode):
+                return
+            exhausted = True
+            message = (message.strip() + "\n\n" + t("bridge.turn.chain_exhausted")).strip()
         st = latest_run_state(Path(fresh["project_path"]), started)
         rstatus = st.get("status")
         fresh["run_id"] = st.get("run_id", fresh.get("run_id"))
@@ -846,7 +952,9 @@ def _start_turn(cfg: Dict[str, Any], job: Dict[str, Any], prep: Dict[str, Any]) 
         if reason:
             message = reason + (("\n\n" + message) if message else "")
             fresh["turns"][-1]["interrupted"] = reason
-        if reason and rstatus not in ("awaiting_user", "blocked", "done", "aborted", "paused"):
+        if exhausted:
+            fresh["status"] = "awaiting_user"           # every account is out: never auto-resume into a limit
+        elif reason and rstatus not in ("awaiting_user", "blocked", "done", "aborted", "paused"):
             fresh["status"] = "stalled"             # re-enters the bounded auto-resume ladder below
         elif proc.returncode != 0 and not message:
             fresh["status"] = "error"

@@ -403,6 +403,20 @@ export function mentionedProjects(text, projects) {
 // "ide ayaklandır", "IDE'yi ayağa kaldır", "ide'yi yeniden başlat", "restart the ide", "revive ide", "/ide"
 const REVIVE_VERB = /^(ayaklandir|ayaga|kaldir|baslat|yeniden|restart|revive|relaunch|start|reopen|ac|acar|acin)/;
 
+// A status question asks how work is going; it never asks for a change. Folded text, Turkish and English.
+const STATUS_ASK = /\b(?:ne durumda|durum(?:u)? (?:ne|nedir)|nasil gidiyor|nerede kaldi|neler (?:devam|yapiliyor|oluyor)|devam eden|acik isler|isler ne|ajanlar ne|hangi isler|status|what'?s running|what is running|how is .{0,40}going|progress)\b/;
+// Words that turn a message into an order to change something ("durum çubuğunu yeşil yap"): whole words or stems.
+const CHANGE_WORD = /^(?:yap|yaz|sil|kur|ekle\w*|duzelt\w*|degistir\w*|guncelle\w*|olustur\w*|yayinla\w*|baslat\w*|fix|build|add|deploy|commit|push|create|change|update|write|remove|delete)$/;
+
+/** Whether a message only asks how the running work is going (the agent answers it with a read-only report). */
+export function isStatusQuestion(text) {
+  const words = foldedWords(text).map((w) => w.word);
+  if (words.length === 0 || words.length > 14 || words.some((w) => CHANGE_WORD.test(w))) {
+    return false;
+  }
+  return STATUS_ASK.test(fold(text).replace(/\s+/g, " "));
+}
+
 /** Whether a short message asks to bring the IDE and the Orkestra tools back. */
 export function isReviveRequest(text) {
   const words = foldedWords(text).map((w) => w.word);
@@ -425,4 +439,114 @@ export function formatRevive(result, lang = resolveLang()) {
     lines.push(line(app.app, app.state));
   }
   return lines.join("\n");
+}
+
+// ---------------------------------------------------------------- voice, attachments, queue and progress (autopilot)
+
+// OpenClaw's Telegram audio preflight turns a voice note without caption into this text before any plugin sees it.
+const VOICE_FRAME = /^\s*\[Audio transcript \(machine-generated, untrusted\)\]:\s*/;
+
+/**
+ * The owner's words in a message that may be a voice-note transcript. OpenClaw sends a transcript as
+ * `[Audio transcript (machine-generated, untrusted)]: "<JSON string>"`; inside is what the owner said. The plugin only
+ * reads messages of the allowlisted owner account, so those words are the owner's own order.
+ * @param {string} content
+ * @returns {{ text: string, voice: boolean }}
+ */
+export function unwrapVoiceTranscript(content) {
+  const raw = String(content ?? "");
+  const m = VOICE_FRAME.exec(raw);
+  if (!m) {
+    return { text: raw, voice: false };
+  }
+  const rest = raw.slice(m[0].length).trim();
+  try {
+    const parsed = JSON.parse(rest);
+    if (typeof parsed === "string") {
+      return { text: parsed.trim(), voice: true };
+    }
+  } catch {
+    // not JSON: fall through to the plain text
+  }
+  return { text: rest.replace(/^"|"$/g, "").trim(), voice: true };
+}
+
+/** Kinds of file a job may receive from Telegram (media and documents; never config, keys or tokens). */
+export const ATTACHMENT_EXTENSIONS = new Set([
+  "jpg", "jpeg", "png", "webp", "gif", "heic", "heif", "bmp", "tif", "tiff", "svg",
+  "mp4", "mov", "m4v", "webm", "mkv", "avi", "3gp",
+  "ogg", "oga", "opus", "mp3", "m4a", "aac", "wav", "flac", "amr",
+  "pdf", "txt", "md", "csv", "log", "html", "zip",
+]);
+export const ATTACHMENT_MAX_FILES = 20;
+
+/**
+ * Attachment references the agent passed, mapped to absolute paths that may be handed to a job. Accepts
+ * `media://inbound/<name>` (how OpenClaw shows inbound media to the agent), `@/abs/path` and `/abs/path`. A path must sit
+ * inside one of `roots` (no `..`), have a media/document extension and appear once; at most ATTACHMENT_MAX_FILES are
+ * kept. Pure: existence, symlinks and size are checked by the caller on the real file.
+ * @param {unknown} refs
+ * @param {{ roots: string[], inboundDir: string }} where
+ * @returns {{ files: string[], rejected: string[] }}
+ */
+export function attachmentCandidates(refs, { roots, inboundDir }) {
+  const files = [];
+  const rejected = [];
+  for (const ref of Array.isArray(refs) ? refs : []) {
+    let p = String(ref ?? "").trim().replace(/^@/, "");
+    if (!p) {
+      continue;
+    }
+    const media = /^media:\/\/inbound\/([^/\\]+)$/.exec(p);
+    if (media) {
+      p = `${inboundDir.replace(/\/+$/, "")}/${media[1]}`;
+    }
+    const ext = (/\.([A-Za-z0-9]{1,5})$/.exec(p)?.[1] ?? "").toLowerCase();
+    const inside = roots.some((r) => p.startsWith(`${r.replace(/\/+$/, "")}/`));
+    if (!p.startsWith("/") || p.split("/").includes("..") || !inside || !ATTACHMENT_EXTENSIONS.has(ext)) {
+      rejected.push(String(ref));
+      continue;
+    }
+    if (!files.includes(p)) {
+      files.push(p);
+    }
+  }
+  return { files: files.slice(0, ATTACHMENT_MAX_FILES), rejected: [...rejected, ...files.slice(ATTACHMENT_MAX_FILES)] };
+}
+
+/** The request a job gets: the owner's words, then the files it must look at (model-facing text, English). */
+export function requestWithAttachments(request, files) {
+  if (!files?.length) {
+    return request;
+  }
+  return `${request}\n\nAttachments the owner sent with this request (screenshots, photos, video key frames, audio or ` +
+    `documents). They are part of the request: open every one with the Read tool before planning.\n` +
+    files.map((f) => `- ${f}`).join("\n");
+}
+
+/**
+ * The periodic progress note for the owner: open runs started from Telegram (headless), one block each. Returns null
+ * when there is nothing open or nothing changed since `lastSignature` (no message without news).
+ * @param {any[]} runs `orkestra watch --json`
+ * @param {string} lastSignature
+ * @returns {{ text: string, signature: string } | null}
+ */
+export function formatProgressDigest(runs, lastSignature = "", lang = resolveLang()) {
+  const open = (runs ?? []).filter((r) => OPEN_RUN_STATUSES.has(r.status) && r.mode === "headless");
+  if (open.length === 0) {
+    return null;
+  }
+  const signature = open
+    .map((r) => [r.project_name, r.status, r.phase, r.tasks_done, r.tasks_total, r.live?.text].join("|"))
+    .sort()
+    .join("\n");
+  if (signature === lastSignature) {
+    return null;
+  }
+  const lines = [t("digest.title", { n: open.length }, lang)];
+  for (const r of open) {
+    lines.push(t("status.run_head", { project: r.project_name, title: r.title }, lang));
+    lines.push(`  ${phaseText(r, lang)}${tasksSuffix(r.tasks_done, r.tasks_total, lang)} · ${r.live?.text || statusText(r, lang)}`);
+  }
+  return { text: lines.join("\n"), signature };
 }

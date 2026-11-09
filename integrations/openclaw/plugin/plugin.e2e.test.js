@@ -244,7 +244,7 @@ test("/durum tells the truth: desktop runs are listed even when the bridge has n
   const text = (await commands.durum.handler({})).text;
   assert.match(
     text,
-    /Açık run'lar \(1\):\n• demo2 — masaüstü işi\n {2}\S+ · masaüstü · /,
+    /Açık run'lar \(1\):\n• demo2: masaüstü işi\n {2}\S+ · masaüstü · /,
   );
   assert.match(text, /Telegram'dan başlatılmış açık iş yok\./);
   assert.doesNotMatch(text, /Kayıtlı orkestra işi yok/);
@@ -255,7 +255,7 @@ test("/yap refuses a project whose run is already open elsewhere (no takeover, n
     .text;
   assert.match(
     text,
-    /⛔ Başlatmadım: \[demo2\] projesinde zaten açık bir orkestra run var — "masaüstü işi"/,
+    /⛔ Başlatmadım: \[demo2\] projesinde zaten açık bir orkestra run var: "masaüstü işi"/,
   );
   assert.match(text, /masaüstü/);
   const jobs = await new Promise((resolve) =>
@@ -411,8 +411,8 @@ test("full flow: /yap → question → reply-to with a letter → that job gets 
   );
   const status = (await commands.durum.handler({})).text;
   assert.match(status, /Açık run'lar \(2\):/);
-  assert.match(status, /• demo — [^\n]+\n {2}[^\n]+ · Telegram işi · /);
-  assert.match(status, /• demo2 — masaüstü işi/);
+  assert.match(status, /• demo: [^\n]+\n {2}[^\n]+ · Telegram işi · /);
+  assert.match(status, /• demo2: masaüstü işi/);
   assert.match(status, new RegExp(`• ${jobId} · demo · ⏸ Yanıtını bekliyor`));
   assert.match((await commands.iptal.handler({})).text, /İptal edildi/);
   await waitFor(

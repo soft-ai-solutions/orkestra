@@ -348,6 +348,24 @@ def _ensure_watcher(project) -> None:
 
 
 def on_session_start(ev: dict) -> None:
+    # Claude Code runs this hook from its cached plugin copy: say so when that copy is older than its local checkout
+    # (the guards fixed since then are not active). One file walk per session; nothing at all when the copy is current.
+    try:
+        from orkestra_core import plugincopy
+        note = plugincopy.stale_note(Path(paths.__file__).resolve().parent.parent.parent)
+    except Exception as exc:                                # a convenience: never let it break the event
+        log(f"plugincopy check failed: {exc}")
+        note = ""
+    if note:
+        _PENDING_CONTEXT["text"] = "\n".join(x for x in (_PENDING_CONTEXT["text"], note) if x)
+    try:
+        _on_session_start(ev)
+    finally:
+        if _PENDING_CONTEXT["text"]:
+            context_out("SessionStart", "")
+
+
+def _on_session_start(ev: dict) -> None:
     b = binding_for(ev)
     if b:
         _ensure_watcher(Path(b["project"]))

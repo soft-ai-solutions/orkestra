@@ -126,6 +126,22 @@ gizli dosyalar ve EAS bulut derlemeleri. `/yap`'taki açık çalışma kuralı d
 (127.0.0.1:47616) ve `ideApps` içindeki uygulamalar (varsayılan `["Cursor"]`) kontrol edilir, kapalı olan başlatılır ve
 yanıt her birinin durumunu listeler.
 
+### Otomatik pilot sahip modu (`autopilotAll`)
+
+`autopilotAll: true` iken izinli sahibin her isteği bir sahip işidir ve geri soru sorulmaz:
+
+- `/yap` (`/run`) ve ajanın `orkestra_run` aracı sahip işi başlatır (yukarıdaki yetkilerle).
+- Sesli mesaj OpenClaw'ın transkript çerçevesiyle gelir (`[Audio transcript (machine-generated, untrusted)]: "..."`);
+  eklenti içindeki sözleri okur, böylece sesle verilen parolalı komut ve bir işe sesle verilen Yanıt yazılmış gibi çalışır.
+- Fotoğraf, video ya da dosya taşıyan, birden çok projeyi ya da hiç projeyi anmayan parolalı komutu eklenti işlemez:
+  ajana gider; ajan proje başına bir `orkestra_run` başlatır ve ekleri `attachments` ile verir (`media://inbound/<ad>` ya
+  da OpenClaw medya klasörü veya ajan çalışma alanı altındaki mutlak yollar, yalnız medya ve belge türleri, en çok 20
+  dosya, dosya başına 100 MB). Ekler `~/.orkestra/inbox/<zaman>/` altına kopyalanır ve istekte listelenir.
+- Açık run'ı olan (ya da son 90 saniyede iş başlatılan) projede istek reddedilmez, sıraya alınır; bildirim servisi run
+  bitince en eskiden başlayarak başlatır ve sohbete yazar. Sıra gateway yeniden başlasa da korunur.
+- `progressMinutes` (0 = kapalı) Telegram'dan açık run'lar için en fazla bu sıklıkla, yalnız ilerleme olduysa tek bir
+  ara özet gönderir.
+
 ## Garantiler
 
 - Headless run'lar etkileşimli olanla aynı guard'lardan geçer: commit/push/deploy yok, sırlar okunmaz; autopilot varsayılandır, manual plan onayı yalnız gerçek kullanıcı mesajıyla kaydedilir.

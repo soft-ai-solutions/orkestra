@@ -162,7 +162,7 @@ class TestParserFixes(unittest.TestCase):
         b = binding()
         copy = 'BACKUP=$(mktemp -d /tmp/hifz-x.XXXXXX) && cp a.txt "$BACKUP/"'
         self.assertFalse(decide(bash(copy), b).denied, copy)
-        outside = 'BACKUP=$(mktemp -d /Users/shared/x.XXXXXX) && cp a.txt "$BACKUP/"'
+        outside = 'BACKUP=$(mktemp -d /Users/x/x.XXXXXX) && cp a.txt "$BACKUP/"'
         self.assertTrue(decide(bash(outside), b).denied, outside)
         loop = 'for f in test/ui/goldens/home_a.png test/ui/goldens/result_b.png; do cp "$b" "$f"; done'
         self.assertFalse(decide(bash(loop), b).denied, loop)

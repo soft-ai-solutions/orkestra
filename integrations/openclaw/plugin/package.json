@@ -5,7 +5,7 @@
   "type": "module",
   "description": "OpenClaw plugin: Telegram → orkestra bridge commands, reply routing and notifications.",
   "scripts": {
-    "test": "node --test logic.test.js lang.test.js messages.test.js logic.i18n.test.js index.test.js",
+    "test": "node --test logic.test.js lang.test.js messages.test.js logic.i18n.test.js index.test.js autopilot.test.js",
     "test:e2e": "node --test plugin.e2e.test.js"
   },
   "openclaw": {

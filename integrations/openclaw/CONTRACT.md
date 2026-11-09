@@ -129,6 +129,21 @@ as well as secret files and EAS cloud builds. The open-run rule of `/run` applie
 (127.0.0.1:47616) and the apps in `ideApps` (default `["Cursor"]`) are checked and started when they are down, and the
 answer lists each one.
 
+### Autopilot owner mode (`autopilotAll`)
+
+With `autopilotAll: true` every request of the allowlisted owner is an owner job, and nothing is asked back:
+
+- `/run` (`/yap`) and the agent's `orkestra_run` start owner jobs (same grants as above).
+- A voice note arrives as OpenClaw's transcript frame (`[Audio transcript (machine-generated, untrusted)]: "..."`); the
+  plugin reads the words inside, so a spoken passphrase order and a spoken Reply to a job work like typed ones.
+- A passphrase order that carries a photo, video or file, names several projects or names none is not handled by the
+  plugin: it reaches the agent, which starts one `orkestra_run` per project and passes the media in `attachments`
+  (`media://inbound/<name>` or absolute paths under the OpenClaw media folder or agent workspace, media and document
+  kinds only, at most 20 files of 100 MB). They are copied to `~/.orkestra/inbox/<stamp>/` and listed in the request.
+- A project with an open run (or a start in the last 90 seconds) queues the request instead of refusing it; the notifier
+  starts it, oldest first, once the run is gone, and says so in the chat. The queue survives a gateway restart.
+- `progressMinutes` (0 = off) sends one progress note on the open Telegram runs at most that often, only when one moved.
+
 ## Guarantees
 
 - Headless runs pass through the same guards as interactive ones: no commit, push or deploy, secrets are never read;

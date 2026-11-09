@@ -134,7 +134,7 @@ test("formatBusyProject in English and Turkish", () => {
   assert.match(en, /\(\/runs\)/);
   assert.doesNotMatch(en, TURKISH_LETTERS);
   const tr = formatBusyProject("mobile-app", RUN, "tr");
-  assert.match(tr, /^⛔ Başlatmadım: \[mobile-app\] projesinde zaten açık bir orkestra run var — "Add dark mode"\n/);
+  assert.match(tr, /^⛔ Başlatmadım: \[mobile-app\] projesinde zaten açık bir orkestra run var: "Add dark mode"\n/);
   assert.match(tr, /\nuygulama · görev 4\/19 · masaüstü · running: implementer\n/);
   const headless = formatBusyProject("x", { ...RUN, mode: "headless", live: null }, "en");
   assert.match(headless, /implement · task 4\/19 · Telegram \/run · active\n/);
@@ -154,7 +154,7 @@ test("formatStatus in English and Turkish", () => {
   assert.match(en, /Runs started on the desktop are monitored here/);
   assert.doesNotMatch(en, TURKISH_LETTERS);
   const tr = formatStatus(input, "tr");
-  assert.match(tr, /Açık run'lar \(1\):\n• mobile-app — Add dark mode\n {2}uygulama · görev 4\/19 · masaüstü · running: implementer/);
+  assert.match(tr, /Açık run'lar \(1\):\n• mobile-app: Add dark mode\n {2}uygulama · görev 4\/19 · masaüstü · running: implementer/);
   assert.match(tr, /Son 12 saatte kapanan: shop \(bitti\)/);
 });
 

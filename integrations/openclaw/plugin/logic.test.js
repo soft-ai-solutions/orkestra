@@ -93,8 +93,8 @@ const DESKTOP_RUNS = [
 test("formatStatus reports desktop runs even when the bridge has no jobs", () => {
   const text = formatStatus({ runs: DESKTOP_RUNS, bridgeJobs: [] });
   assert.match(text, /Açık run'lar \(2\):/);
-  assert.match(text, /• deals-app — Derin analiz ve hata düzeltme\n {2}netleştirme · masaüstü · muhtemelen SENİ BEKLİYOR/);
-  assert.match(text, /• mobile-app — Önerilen geliştirmelerin tamamı\n {2}uygulama · görev 4\/19 · masaüstü · çalışıyor — implementer/);
+  assert.match(text, /• deals-app: Derin analiz ve hata düzeltme\n {2}netleştirme · masaüstü · muhtemelen SENİ BEKLİYOR/);
+  assert.match(text, /• mobile-app: Önerilen geliştirmelerin tamamı\n {2}uygulama · görev 4\/19 · masaüstü · çalışıyor — implementer/);
   assert.match(text, /Son 12 saatte kapanan: shop \(bitti\)/);
   assert.match(text, /Telegram'dan başlatılmış açık iş yok\./);
   assert.match(text, /Claude penceresinden cevaplanır/);
@@ -120,7 +120,7 @@ test("findOpenRun blocks only projects with an open run", () => {
   assert.equal(findOpenRun(runs, "ledger"), null, "exact folder names only");
   assert.equal(findOpenRun(null, "x"), null);
   const msg = formatBusyProject("mobile-app", DESKTOP_RUNS[1]);
-  assert.match(msg, /^⛔ Başlatmadım: \[mobile-app\] projesinde zaten açık bir orkestra run var — "Önerilen geliştirmelerin tamamı"/);
+  assert.match(msg, /^⛔ Başlatmadım: \[mobile-app\] projesinde zaten açık bir orkestra run var: "Önerilen geliştirmelerin tamamı"/);
   assert.match(msg, /uygulama · görev 4\/19 · masaüstü · çalışıyor — implementer/);
 });
 
@@ -181,5 +181,25 @@ test("revive requests are short and name the IDE", () => {
   }
   for (const text of ["ide ayarları nerede", "namaz vakitleri projesinde ide ayarlarını düzelt lütfen bugün hemen", "ayaklandır"]) {
     assert.equal(reviveAsk(text), false, text);
+  }
+});
+
+// ---------------------------------------------------------------- status questions stay with the agent
+import { isStatusQuestion as statusAsk } from "./logic.js";
+
+test("a status question is read-only: the fast owner path leaves it to the agent's status report", () => {
+  for (const text of [
+    "şu an devam eden işler ne durumda?", "kafadar ne durumda", "işler nasıl gidiyor", "neler devam ediyor",
+    "açık işler neler", "ajanlar ne yapıyor", "durum ne", "wakewild nerede kaldı", "what's running", "status?",
+    "how is kafadar going", "neler yapılıyor şu an",
+  ]) {
+    assert.equal(statusAsk(text), true, text);
+  }
+  for (const text of [
+    "kafadar giriş ekranını düzelt", "wakewild'a yeni seviye ekle ve durumu raporla", "durum çubuğunu yeşil yap",
+    "fix the status bar in kafadar", "deploy kafadar", "kafadar ne durumda bilmiyorum ama login sayfasını baştan yaz",
+    "",
+  ]) {
+    assert.equal(statusAsk(text), false, text);
   }
 });

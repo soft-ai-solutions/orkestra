@@ -1885,30 +1885,16 @@ def cmd_lang(a: argparse.Namespace) -> int:
     return 0
 
 
-def _tree_digest(root: Path) -> str:
-    """Digest of the code that runs the guards (hooks + library) under `root`; '' when there is none."""
-    import hashlib
-    h = hashlib.sha1()
-    found = False
-    for pattern in ("hooks/*.py", "hooks/*.json", "hooks/*.sh", "lib/orkestra_core/*.py", "lib/orkestra_core/messages/*.py"):
-        for f in sorted(root.glob(pattern)):
-            try:
-                data = f.read_bytes()
-            except OSError:
-                continue
-            found = True
-            h.update(f.relative_to(root).as_posix().encode("utf-8") + b"\0" + hashlib.sha1(data).digest())
-    return h.hexdigest() if found else ""
-
-
 def _claude_copies() -> List[Tuple[str, str, bool]]:
     """(install path, version, same code as this checkout) of every other copy Claude Code registered for orkestra.
     Claude Code runs hooks from its own cached copy, so a checkout edited after the install is NOT what the guards
-    run until the plugin is updated. Read-only; never touches ~/.claude."""
+    run until the plugin is updated. One line per copy, however many install scopes point at it. Read-only; never
+    touches ~/.claude."""
+    from . import plugincopy
     reg = read_json(Path(os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude").expanduser() / "plugins"
                     / "installed_plugins.json", default={}) or {}
-    mine = _tree_digest(PLUGIN_ROOT)
     out: List[Tuple[str, str, bool]] = []
+    seen = set()
     plugins = reg.get("plugins") if isinstance(reg, dict) else None
     for name, entries in (plugins.items() if isinstance(plugins, dict) else []):
         if not str(name).startswith("orkestra@"):
@@ -1916,9 +1902,11 @@ def _claude_copies() -> List[Tuple[str, str, bool]]:
         for e in entries if isinstance(entries, list) else []:
             raw = str(e.get("installPath") or "") if isinstance(e, dict) else ""
             path = Path(raw).expanduser()
-            if not raw or not path.is_dir() or os.path.realpath(path) == os.path.realpath(PLUGIN_ROOT):
+            real = os.path.realpath(path)
+            if not raw or not path.is_dir() or real == os.path.realpath(PLUGIN_ROOT) or real in seen:
                 continue
-            out.append((str(path), str(e.get("version") or "?"), bool(mine) and _tree_digest(path) == mine))
+            seen.add(real)
+            out.append((str(path), str(e.get("version") or "?"), plugincopy.same_code(PLUGIN_ROOT, path)))
     return out
 
 

@@ -56,6 +56,7 @@ function harness(script = {}, { config = {}, failRegister = [] } = {}) {
   const hooks = {};
   const tools = {};
   const warnings = [];
+  const services = [];
   const runner = (argv) => {
     calls.push(argv);
     const reply = (code, body) => Promise.resolve({ code, stdout: typeof body === "string" ? body : JSON.stringify(body), stderr: "" });
@@ -79,13 +80,15 @@ function harness(script = {}, { config = {}, failRegister = [] } = {}) {
     on: (name, fn) => {
       hooks[name] = fn;
     },
-    registerService: () => {},
+    registerService: (svc) => {
+      services.push(svc);
+    },
     registerTool: (def) => {
       tools[def.name] = def;
     },
   };
   plugin.register(api);
-  return { commands, hooks, calls, warnings, tools };
+  return { commands, hooks, calls, warnings, tools, services };
 }
 
 const ok = (body) => Promise.resolve({ code: 0, stdout: JSON.stringify(body), stderr: "" });
@@ -232,7 +235,7 @@ test("/runs and /durum show open runs and Telegram jobs", async () => {
   assert.doesNotMatch(en, TURKISH_LETTERS);
   lang("tr");
   const tr = (await commands.durum.handler({})).text;
-  assert.match(tr, /^🎼 Orkestra durumu\nAçık run'lar \(1\):\n• deals — Fix\n {2}netleştirme · masaüstü · waiting for you/);
+  assert.match(tr, /^🎼 Orkestra durumu\nAçık run'lar \(1\):\n• deals: Fix\n {2}netleştirme · masaüstü · waiting for you/);
   assert.equal((await commands.runs.handler({})).text, tr, "the alias answers in the same language");
 });
 
@@ -536,4 +539,179 @@ test("ideApps in the config chooses the apps", async () => {
     { config: { ideApps: ["Visual Studio Code", "Cursor"] } });
   await commands.ide.handler({});
   assert.deepEqual(calls[0].slice(2), ["revive", "--app", "Visual Studio Code", "--app", "Cursor"]);
+});
+
+// ---------------------------------------------------------------- autopilot owner mode (config autopilotAll)
+
+const AUTO = { ownerCommand: OWNER, autopilotAll: true };
+const FRAME = "[Audio transcript (machine-generated, untrusted)]: ";
+
+function autoHarness(extra = {}, config = {}) {
+  return harness({
+    ensure: () => ok({ state: "running" }),
+    projects: () => ok(OWNER_PROJECTS),
+    start: (argv) => ok({ id: JOB, project: argv[3], owner: argv.includes("--owner") }),
+    status: () => ok({ jobs: [] }),
+    send: () => ok({ messageId: "777" }),
+    ...extra,
+  }, { config: { ...AUTO, ...config } });
+}
+
+/** Runs the notifier service once (its first tick) with a state folder of its own. */
+async function runService(h, stateDir) {
+  const svc = h.services[0];
+  await svc.start({ stateDir, logger: { warn() {}, info() {}, error() {}, debug() {} } });
+  await svc.stop();
+}
+
+test("autopilot: orkestra_run and /yap start owner jobs; the agent gets the autopilot brief in English", async () => {
+  lang("tr");
+  const h = autoHarness();
+  const res = await h.tools.orkestra_run.execute("c", { project: "pomi", request: "kaydet düğmesini düzelt ve yayınla" });
+  assert.equal(res.details.started, true);
+  assert.ok(h.calls.find((a) => a[2] === "start").includes("--owner"));
+  await h.commands.yap.handler({ args: "tinko menüyü hızlandır" });
+  assert.ok(h.calls.filter((a) => a[2] === "start")[1].includes("--owner"));
+  const guidance = h.commands.yap.agentPromptGuidance;
+  assert.equal(guidance.length, 2);
+  assert.match(guidance[1].text, /one orkestra_run per project/);
+  assert.match(guidance[1].text, /attachments/);
+  assert.doesNotMatch(guidance[1].text, TURKISH_LETTERS);
+  // without autopilotAll nothing changes: one guidance entry, plain jobs
+  const plain = harness({ projects: () => ok(OWNER_PROJECTS), start: (argv) => ok({ id: JOB, project: argv[3] }) });
+  assert.equal(plain.commands.yap.agentPromptGuidance.length, 1);
+  await plain.tools.orkestra_run.execute("c", { project: "pomi", request: "kaydet düğmesini düzelt" });
+  assert.ok(!plain.calls.find((a) => a[2] === "start").includes("--owner"));
+});
+
+test("autopilot: attachments are copied into a private inbox and listed in the job's request; others are refused", async () => {
+  lang("en");
+  const ocHome = path.join(tmp, "openclaw-home");
+  const inbound = path.join(ocHome, "media", "inbound");
+  fs.mkdirSync(inbound, { recursive: true });
+  fs.mkdirSync(path.join(ocHome, "credentials"), { recursive: true });
+  fs.writeFileSync(path.join(inbound, "shot.jpg"), "jpeg-bytes");
+  fs.writeFileSync(path.join(ocHome, "credentials", "bot.txt"), "secret");
+  fs.symlinkSync(path.join(ocHome, "credentials", "bot.txt"), path.join(inbound, "sneaky.txt"));   // target outside
+  fs.writeFileSync(path.join(inbound, "config.json"), "{}");
+  const saved = process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_STATE_DIR = ocHome;
+  try {
+    const h = autoHarness();
+    const res = await h.tools.orkestra_run.execute("c", {
+      project: "pomi",
+      request: "make the header look like this screenshot",
+      attachments: ["media://inbound/shot.jpg", "media://inbound/sneaky.txt", path.join(inbound, "config.json"),
+        "media://inbound/missing.png"],
+    });
+    assert.equal(res.details.started, true);
+    assert.equal(res.details.attachments, 1);
+    assert.match(res.content[0].text, /📎 1 attachment\(s\) handed to the job\./);
+    assert.match(res.content[0].text, /⚠️ 3 attachment\(s\) not passed/);
+    const request = h.calls.find((a) => a[2] === "start")[4];
+    const listed = /\n- (\S+)$/.exec(request)[1];
+    assert.ok(listed.startsWith(path.join(process.env.ORKESTRA_HOME, "inbox") + path.sep));
+    assert.match(path.basename(listed), /^01-shot\.jpg$/);
+    assert.equal(fs.readFileSync(listed, "utf8"), "jpeg-bytes");
+    assert.ok(!request.includes("secret") && !request.includes("sneaky"));
+  } finally {
+    if (saved === undefined) delete process.env.OPENCLAW_STATE_DIR;
+    else process.env.OPENCLAW_STATE_DIR = saved;
+  }
+});
+
+test("autopilot: a busy project queues the request instead of refusing; the notifier starts it once the run is gone", async () => {
+  lang("tr");
+  let open = [{ project_name: "pomi", status: "active", title: "önceki iş", mode: "headless", phase: "implement" }];
+  const h = autoHarness({ watch: () => ok(open) });
+  const res = await h.tools.orkestra_run.execute("c", { project: "pomi", request: "ikinci istek: yazı tipini büyüt" });
+  assert.equal(res.details.queued, true);
+  assert.equal(res.details.started, false);
+  assert.match(res.content[0].text, /Sıraya aldım: \[pomi\].*sırada 1 istek/);
+  assert.equal(h.calls.filter((a) => a[2] === "start").length, 0);
+  const stateDir = path.join(tmp, "state-queue");
+  await runService(h, stateDir);                                 // still busy: stays queued, nothing sent
+  assert.equal(h.calls.filter((a) => a[2] === "start").length, 0);
+  const file = path.join(stateDir, "plugins", "orkestra-bridge", "state.json");
+  assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).queue.length, 1);
+  open = [];                                                     // the open run finished
+  const again = autoHarness({ watch: () => ok(open) });
+  await runService(again, stateDir);                             // a restart keeps the queue and drains it
+  const start = again.calls.find((a) => a[2] === "start");
+  assert.deepEqual([start[3], start[4], start.includes("--owner")], ["pomi", "ikinci istek: yazı tipini büyüt", true]);
+  const sent = again.calls.find((a) => a[0] === "openclaw" && a[2] === "send");
+  assert.match(sent[sent.indexOf("-m") + 1], /^▶️ Sıradan başladı: 🔑 Sahip komutu başladı: \[pomi\] iş 0123456789ab/);
+  assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).queue.length, 0);
+});
+
+test("autopilot: two quick requests for one project never open two runs", async () => {
+  lang("en");
+  const h = autoHarness();
+  const first = await h.tools.orkestra_run.execute("c", { project: "tinko", request: "first change" });
+  const second = await h.tools.orkestra_run.execute("c", { project: "tinko", request: "second change" });
+  assert.equal(first.details.started, true);
+  assert.equal(second.details.queued, true);
+  assert.equal(h.calls.filter((a) => a[2] === "start").length, 1);
+});
+
+test("a voice owner order works like a typed one: the transcript frame is dropped from the request", async () => {
+  lang("tr");
+  const h = autoHarness();
+  const content = FRAME + JSON.stringify("Open sesame now. Pomi'de kaydet düğmesini düzelt.");
+  h.hooks.message_received({ messageId: "m1", media: [{ kind: "audio", path: "/x/voice.ogg" }] }, {});
+  const res = await h.hooks.before_dispatch(dm(content, { messageId: "m1" }), {});
+  assert.equal(res.handled, true);
+  assert.match(res.text, /Sahip komutu başladı: \[pomi\]/);
+  const start = h.calls.find((a) => a[2] === "start");
+  assert.equal(start[4], "Pomi'de kaydet düğmesini düzelt.");
+  assert.ok(!start[4].includes("Audio transcript"));
+  // a voice reply to a job's question is forwarded as the spoken words
+  const r = autoHarness({ reply: () => ok({ ok: true }) });
+  await r.hooks.before_dispatch(dm(FRAME + JSON.stringify("mavi olanı kullan"), { replyToBody: `[pomi] ⏸ Yanıtını bekliyor · plan · iş ${JOB}` }), {});
+  assert.deepEqual(r.calls.find((a) => a[2] === "reply").slice(3), [JOB, "mavi olanı kullan"]);
+});
+
+test("autopilot: an owner order with a photo or video goes to the agent, which can pass the media on", async () => {
+  lang("en");
+  const h = autoHarness();
+  h.hooks.message_received({ messageId: "p1", media: [{ kind: "image", path: "/x/a.jpg" }] }, {});
+  assert.equal(await h.hooks.before_dispatch(dm("open sesame now: fix pomi like this", { messageId: "p1" }), {}), undefined);
+  assert.equal(h.calls.filter((a) => a[2] === "start").length, 0);
+  // the same text without media keeps the fast path
+  h.hooks.message_received({ messageId: "t1" }, {});
+  const res = await h.hooks.before_dispatch(dm("open sesame now: fix pomi like this", { messageId: "t1" }), {});
+  assert.match(res.text, /Owner command started: \[pomi\]/);
+  // without autopilotAll a photo changes nothing (the owner job starts as before)
+  const classic = ownerHarness();
+  classic.hooks.message_received?.({ messageId: "p2", media: [{ kind: "image" }] }, {});
+  assert.match((await classic.hooks.before_dispatch(dm("open sesame now fix pomi", { messageId: "p2" }), {})).text,
+    /\[pomi\]/);
+});
+
+test("autopilot never asks back: several projects or none go to the agent", async () => {
+  lang("en");
+  const h = autoHarness();
+  assert.equal(await h.hooks.before_dispatch(dm("open sesame now make tinko look like pomi"), {}), undefined);
+  assert.equal(await h.hooks.before_dispatch(dm("open sesame now update the readme"), {}), undefined);
+  assert.equal(h.calls.filter((a) => a[2] === "start").length, 0);
+});
+
+test("progress notes: sent for open Telegram runs when progressMinutes is set, never when it is not", async () => {
+  lang("tr");
+  const runs = [{ project_name: "pomi", title: "Kaydet", status: "active", mode: "headless", phase: "implement",
+    phase_tr: "uygulama", tasks_done: 1, tasks_total: 3, live: { text: "çalışıyor" } }];
+  const h = autoHarness({ watch: () => ok(runs) }, { progressMinutes: 20 });
+  const dir = path.join(tmp, "state-digest");
+  await runService(h, dir);
+  const notes = h.calls.filter((a) => a[0] === "openclaw" && a[2] === "send");
+  assert.equal(notes.length, 1);
+  assert.match(notes[0][notes[0].indexOf("-m") + 1], /^⏳ Ara özet \(Telegram'dan 1 açık iş\):\n• pomi: Kaydet\n  uygulama · görev 1\/3 · çalışıyor$/);
+  const saved = JSON.parse(fs.readFileSync(path.join(dir, "plugins", "orkestra-bridge", "state.json"), "utf8"));
+  assert.ok(saved.digestSig && saved.digestAt > 0);
+  const again = autoHarness({ watch: () => ok(runs) }, { progressMinutes: 20 });
+  await runService(again, dir);                                  // within 20 minutes: no second note
+  assert.equal(again.calls.filter((a) => a[0] === "openclaw" && a[2] === "send").length, 0);
+  const off = autoHarness({ watch: () => ok(runs) });
+  await runService(off, path.join(tmp, "state-off"));
+  assert.equal(off.calls.filter((a) => a[0] === "openclaw" && a[2] === "send").length, 0);
 });

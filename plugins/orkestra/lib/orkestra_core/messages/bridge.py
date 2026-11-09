@@ -91,6 +91,9 @@ EN: Dict[str, str] = {
     "bridge.turn.auto_resume_failed": "Automatic continuation could not start ({error}). Send a message to continue.",
     "bridge.turn.auto_resume_cap": ("(Automatic continuation limit reached: the run was continued {count} times and "
                                     "stopped again. Send a message to continue.)"),
+    "bridge.turn.failover": "({frm} is out of usage ({why}). Continuing on {to}.)",
+    "bridge.turn.chain_exhausted": ("(Every engine in the fallback chain is at its usage limit. The run was not "
+                                    "aborted. Send a message to continue once a limit resets.)"),
 
     # --- serve / init / launchd ----------------------------------------------------------------------------------
     "bridge.serve.no_token": "no token configured: run: python3 orkestra_bridge.py init",
@@ -276,6 +279,9 @@ TR: Dict[str, str] = {
     "bridge.turn.auto_resume_failed": "Otomatik devam başlatılamadı ({error}). Devam için bir mesaj yaz.",
     "bridge.turn.auto_resume_cap": ("(Otomatik devam sınırı aşıldı: {count} kez devam ettirildi, çalışma yine "
                                     "durdu. Devam için bir mesaj yaz.)"),
+    "bridge.turn.failover": "({frm} kullanım sınırında ({why}). {to} ile devam ediliyor.)",
+    "bridge.turn.chain_exhausted": ("(Yedek zincirindeki tüm motorlar kullanım sınırında. Çalışma iptal edilmedi. "
+                                    "Bir sınır sıfırlanınca devam için mesaj yaz.)"),
 
     # --- serve / init / launchd ----------------------------------------------------------------------------------
     "bridge.serve.no_token": "token yapılandırılmamış, önce çalıştır: python3 orkestra_bridge.py init",
