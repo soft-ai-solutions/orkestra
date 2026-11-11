@@ -394,6 +394,22 @@ class TestWatchdogOutput(WatchdogBase):
             tr = self.run_main([self.view(sid=sid)], "tr", dry_run=True).splitlines()[0]
             self.assertTrue(tr.endswith(f" → otomatik devam sınırı aşıldı, senin devam ettirmen gerekiyor ({cmd})"), tr)
 
+    def test_auto_resume_limit_blocks_the_run_so_it_stops_showing_as_running(self):
+        # 2026-11: a run whose session vanished stayed "active" for 4.5 days after the third failed resume
+        self.config(auto_resume="all", max_auto_resumes=3, macos_notify=False)
+        book = {"resumes": {"/w/demo|001-x": {"count": 3, "last": 0}}}
+        for code, want in (("en", "Auto-resume gave up after 3 attempts. Continue it with /orkestra:resume"),
+                           ("tr", "Otomatik devam 3 denemeden sonra durdu. /orkestra:resume ile devam ettir")):
+            (self.home / "watchdog.json").write_text(json.dumps(book), encoding="utf-8")
+            calls = []
+            with mock.patch.object(W, "_set_run_status", side_effect=lambda *a: calls.append(a)):
+                self.run_main([self.view()], code)
+                self.run_main([self.view()], code, dry_run=True)          # a dry run never writes
+                self.run_main([self.view(status="paused")], code)          # only an active run is blocked
+            self.assertEqual(calls, [(Path("/w/demo"), "001-x", "blocked", want)], code)
+            if code == "en":
+                self.assertNotRegex(want, TR_LETTERS)
+
     def test_a_resumed_run_says_which_attempt(self):
         self.config(auto_resume="all", macos_notify=False)
         for code, want in (("en", " → auto-resumed (attempt 1)"), ("tr", " → otomatik devam ettirildi (deneme 1)")):

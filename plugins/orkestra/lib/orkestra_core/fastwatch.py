@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from . import activity as A
+from . import engines as EN
 from . import paths
 from . import state as ST
 from . import tempo as T
@@ -969,8 +970,16 @@ class Watcher:
         book = read_json(W._state_path(), default={}) or {}
         rec = (book.get("resumes") or {}).get(rc.key) or {"count": 0, "last": 0}
         first = RETRY_DELAYS[0] if f["kind"] == "stop_failure" else 0.0
-        if not resume_due(int(rec.get("count") or 0), float(rec.get("last") or 0), f["since"], now, first,
-                          cap=int(wd.get("max_auto_resumes") or 3)):
+        cap = int(wd.get("max_auto_resumes") or 3)
+        if int(rec.get("count") or 0) >= cap:
+            # the ladder is spent: block the run so the dashboard asks for a human instead of showing it running
+            if rc.st.get("status") == "active" and not (rec.get("pid") and self.alive(
+                    [s["id"] for s in rc.sessions], rec.get("pid"))):
+                W._set_run_status(rc.project, rc.rid, "blocked", EN.adapt_text(
+                    t("watchdog.blocked_reason", limit=cap), EN.session_engine(rc.sessions[0]["id"])))
+                rc.st["status"] = "blocked"
+            return
+        if not resume_due(int(rec.get("count") or 0), float(rec.get("last") or 0), f["since"], now, first, cap=cap):
             return
         ids = [s["id"] for s in rc.sessions]
         if self.bridge_owns(ids) or self.alive(ids, rec.get("pid")):

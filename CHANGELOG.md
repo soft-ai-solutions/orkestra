@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### A run the watchdog cannot resume no longer shows as running
+- **Watchdog:** when every auto-resume attempt fails (for example the session no longer exists), the run is now set to
+  blocked with the reason, so the dashboard lists it under "needs a look" instead of "running" for days. Continuing it
+  makes it active again.
+
 ### Weekday commit and push hours in this repository
 - **Orkestra checkout only:** `git commit` and `git push` are refused on Monday to Friday from 09:00 until 18:00 GMT+3.
   18:00, later the same evening, and Saturday and Sunday stay open. Other projects are unchanged. The clock is fixed

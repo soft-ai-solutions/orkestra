@@ -377,6 +377,15 @@ def _spawn_resume(v: Dict[str, Any], cfg: Dict[str, Any], session: str, attempt:
     return int(proc.pid)
 
 
+def _set_run_status(project: Path, run_id: str, status: str, reason: str) -> None:
+    """Best effort: a closed or vanished run must not break the watchdog pass."""
+    try:
+        from . import runs as R
+        R.set_status(project, run_id, status, reason, who={"agent_type": "watchdog", "by": "watchdog"})
+    except Exception:
+        pass
+
+
 def main(once: bool = True, as_json: bool = False, dry_run: bool = False, quiet: bool = False,
          now: Optional[float] = None) -> int:
     now = time.time() if now is None else now
@@ -401,6 +410,7 @@ def main(once: bool = True, as_json: bool = False, dry_run: bool = False, quiet:
             last0 = ((book0.get("resumes") or {}).get(rkey0) or {}).get("pid") if isinstance(book0, dict) else None
             alive_by_run[rkey0] = bool(_bridge_owns(sids0) or _process_alive(sids0, last0))
     spawns: List[Any] = []
+    exhausted: List[Any] = []
     with file_lock(sp, timeout=5):
         book = read_json(sp, default={}) or {}
         if not isinstance(book, dict):
@@ -444,12 +454,20 @@ def main(once: bool = True, as_json: bool = False, dry_run: bool = False, quiet:
             elif dec.get("limit"):
                 v["message"] += EN.adapt_text(t("watchdog.auto_resume_limit"),
                                               EN.session_engine(sids[0] if sids else ""))
+                if not dry_run and v.get("status") == "active":
+                    exhausted.append((v, sids))
         for k in [k for k in inc if k not in live_keys]:
             inc.pop(k, None)                       # incident over → the next one notifies again immediately
         for k in [k for k in book["resumes"] if k not in open_runs]:
             book["resumes"].pop(k, None)
         if not dry_run:
             write_json_atomic(sp, book)
+    # Auto-resume gave up: block the run (outside the book lock) so the dashboard shows "needs a look" instead of
+    # "running" for days with nobody driving it. The user's next prompt in the run sets it active again (hookmain).
+    limit = int(wd.get("max_auto_resumes") or 3)
+    for v, sids in exhausted:
+        reason = EN.adapt_text(t("watchdog.blocked_reason", limit=limit), EN.session_engine(sids[0] if sids else ""))
+        _set_run_status(Path(v["project"]), v["run_id"], "blocked", reason)
     for v, rkey, dec, prev in spawns:
         res = _spawn_resume(v, cfg, dec["session"], dec["attempt"])
         with file_lock(sp, timeout=5):

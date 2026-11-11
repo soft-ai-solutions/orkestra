@@ -18,6 +18,7 @@ EN: Dict[str, str] = {
     # what the watchdog did about it (appended to the headline)
     "watchdog.auto_resumed": " → auto-resumed (attempt {attempt})",
     "watchdog.auto_resume_limit": " → auto-resume limit reached, you need to continue it (/orkestra:resume)",
+    "watchdog.blocked_reason": "Auto-resume gave up after {limit} attempts. Continue it with /orkestra:resume",
     # `orkestra watchdog` output
     "watchdog.no_open_runs": "No open orkestra runs.",
     "watchdog.damaged_run": "[{project}] DAMAGED run {run_id}: state.json is unreadable. Run `orkestra doctor --repair` to restore it from state.json.prev.",
@@ -67,6 +68,7 @@ TR: Dict[str, str] = {
     "watchdog.message": "[{project}] {head}{since} — {text} · faz {phase}",
     "watchdog.auto_resumed": " → otomatik devam ettirildi (deneme {attempt})",
     "watchdog.auto_resume_limit": " → otomatik devam sınırı aşıldı, senin devam ettirmen gerekiyor (/orkestra:resume)",
+    "watchdog.blocked_reason": "Otomatik devam {limit} denemeden sonra durdu. /orkestra:resume ile devam ettir",
     "watchdog.no_open_runs": "Açık orkestra çalışması yok.",
     "watchdog.damaged_run": "[{project}] BOZUK çalışma {run_id}: state.json okunamıyor. `orkestra doctor --repair` ile state.json.prev dosyasından geri yükle.",
     "watchdog.damaged_run_noprev": "[{project}] BOZUK çalışma {run_id}: state.json okunamıyor ve state.json.prev yok. Kenara almak için `orkestra doctor --repair` çalıştır.",

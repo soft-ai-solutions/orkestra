@@ -557,6 +557,22 @@ class TestResume(FW):
         book = json.loads((self.home / "watchdog.json").read_text())
         self.assertEqual(book["resumes"][f"{self.proj}|001-x"]["count"], 3)
 
+    def test_an_exhausted_ladder_blocks_the_run_instead_of_leaving_it_running(self):
+        # 2026-11: three failed resumes left a run "active" on the dashboard for 4.5 days with nobody driving it
+        self.make_run(mode="headless", rows=[row(T0, "api_error", what="rate_limit")])
+        self.bind(now=T0 + 400, age=400)
+        blocked = []
+        with mock.patch.object(W, "_set_run_status", side_effect=lambda *a: blocked.append(a)):
+            w = self.watcher(spawner=self.spawner)
+            for at in (T0 + 10, T0 + 70, T0 + 369):
+                w.tick(at)
+            self.assertEqual(blocked, [])                         # attempts left: not blocked yet
+            w.tick(T0 + 370)
+            w.tick(T0 + 99999)
+        self.assertEqual(len(self.spawned), 3)
+        self.assertEqual([(a[1], a[2]) for a in blocked], [("001-x", "blocked")])
+        self.assertIn("3", blocked[0][3])
+
     def test_interactive_runs_are_only_announced_and_live_processes_are_never_doubled(self):
         self.make_run(mode="interactive", rows=[row(T0, "api_error", what="overloaded")])
         self.bind(now=T0, age=0)
