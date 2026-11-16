@@ -34,7 +34,7 @@ import {
   isReviveRequest,
   isStatusQuestion,
   matchOwnerPhrase,
-  mentionedProjects,
+  ownerProjects,
   ownerConfigValid,
   parseJobRef,
   parseSentMessageIds,
@@ -320,7 +320,7 @@ export default definePluginEntry({
       const names = listed.ok && Array.isArray(listed.body?.projects)
         ? listed.body.projects.map((p) => (typeof p === "string" ? p : p?.name)).filter(Boolean)
         : [];
-      const hits = mentionedProjects(request, names).slice(0, LETTERS.length);
+      const hits = ownerProjects(request, names).slice(0, LETTERS.length);
       if (hits.length === 0 && names.length && owner.machineTasks === "agent") {
         return null;                          // no project named: a machine task (a failed listing still asks)
       }

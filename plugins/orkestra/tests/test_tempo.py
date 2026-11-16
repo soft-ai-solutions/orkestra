@@ -153,7 +153,7 @@ class TestNextWalksTheWholeRun(TempoBase):
         self.cli("tdd", "green", "T001", "-p", "demo", "--", cmd)
         n = self.nxt()
         self.assertIn("T001 · review_pending", n)
-        self.assertIn("orkestra:reviewer (scope: task T001", n)
+        self.assertIn("orkestra:reviewer with model: sonnet (scope: task T001", n)   # first round: mid-tier
         # a file changed after green → the evidence is stale
         time.sleep(2.2)
         os.utime(self.proj / "calc.py", None)
@@ -175,7 +175,9 @@ class TestNextWalksTheWholeRun(TempoBase):
             fh.write("\n# fixed\n")
         (self.proj / "calc.py").write_text((self.proj / "calc.py").read_text().replace("return a - b", "return a - b if a != 1 else -3"))
         self.cli("tdd", "green", "T001", "-p", "demo", "--", cmd)
-        self.assertIn("T001 · review_pending", self.nxt())        # stale FAIL does not count for the new green
+        n = self.nxt()
+        self.assertIn("T001 · review_pending", n)                 # stale FAIL does not count for the new green
+        self.assertIn("orkestra:reviewer with model: opus", n)     # a task that failed review gets the strongest model
         time.sleep(1.1)
         self.review("T001", "PASS", name="T001.md", minors=2)
         n = self.nxt()
@@ -271,7 +273,7 @@ class TestInterruptedRunResumesExactly(TempoBase):
             fh.write("\n\ndef sub(a, b):\n    return a - b\n")
         self.cli("tdd", "green", "T001", "-p", "demo", "--", cmd)
         self.new_session("s4")
-        self.assertIn("orkestra:reviewer (scope: task T001", self.nxt())         # not re-implemented
+        self.assertIn("orkestra:reviewer with model: sonnet (scope: task T001", self.nxt())   # not re-implemented
         # (4) cut after the reviewer wrote PASS, before the verdict was applied
         self.review("T001", "PASS")
         self.new_session("s5")

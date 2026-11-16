@@ -12,6 +12,7 @@ Loop until `orkestra next` answers `orkestra phase next`:
    record it in the plan change log. In autopilot, do not ask the user; use `orkestra task defer Txxx "<why>"` or
    `orkestra block` only when a real external dependency or safety boundary makes progress impossible.
 5. Dispatch `orkestra:reviewer` with `scope: task Txxx`, project path and run folder (it writes `reviews/Txxx.review.md`). End your turn.
+   Model: pass `model: sonnet` on the first round and `model: opus` once the task has failed a review (`orkestra next` names it).
    The reviewer starts from `orkestra brief --review Txxx` (one call: acceptance, red/green tails, report, diff of the task's files).
 6. Reviewer FAIL → `orkestra task reopen Txxx "review round N" -p <project>` (resets red/green so the fix starts with a
    fresh failing test) → `orkestra task start Txxx` → send the findings to the implementer (SendMessage to the same agent

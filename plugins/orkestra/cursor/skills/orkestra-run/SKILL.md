@@ -73,7 +73,7 @@ User request: (what the user wrote with this command)
 | architect   | opus   | writes spec.md / plan.md                                     |
 | plan-critic | opus   | checks the plan before the user sees it                      |
 | implementer | sonnet | one task at a time, strict TDD                               |
-| reviewer    | opus   | per task (spec compliance + quality) and final review        |
+| reviewer    | opus   | final review; per task on M/L with `model: sonnet` (opus after a FAIL) |
 | adversary   | opus   | final review: edge cases, security, failure modes            |
 | verifier    | sonnet | goal-backward verification, verification.md                  |
 

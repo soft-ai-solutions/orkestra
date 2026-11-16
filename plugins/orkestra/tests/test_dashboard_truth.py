@@ -176,8 +176,13 @@ class TestEveryStateAndEvidence(Truth):
             with self.subTest(name):
                 rid = "r-" + name
                 self.make_run("p-" + name, rid, **resolve(kw, time.time()))
+                # Freeze the clock right after writing the run (every file time stays in the past): the texts carry
+                # second-level ages ("5s ago"), and a loaded machine spends more than a second listing the growing
+                # workspace between the two languages.
+                frozen = time.time()
                 for code, parts in (("en", en), ("tr", tr)):
-                    v = self.verdict(code, rid)
+                    with mock.patch("time.time", return_value=frozen):
+                        v = self.verdict(code, rid)
                     a = v["attention"]
                     self.assertEqual((a["group"], a["code"]), want, (code, a))
                     text = self.texts(v)

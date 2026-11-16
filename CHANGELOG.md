@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Cheaper per-task reviews on M/L runs
+- **`orkestra next` names the reviewer model:** the first review of a task now asks for `model: sonnet` (the reviewer
+  starts from one pre-digested `orkestra brief --review` packet), and a task that already failed a review gets
+  `model: opus`. The final review and the adversary keep their opus default, so the last check of the whole change is
+  unchanged. The run skill table and the implement playbook say the same.
+- **Tests:** the dashboard truth table no longer fails on a busy machine (its "5s ago" texts now read a frozen clock),
+  and the OpenClaw end-to-end Copilot test writes the plugin manifest and reads the `--session-id=<id>` form the bridge
+  sends.
+
 ### A run the watchdog cannot resume no longer shows as running
 - **Watchdog:** when every auto-resume attempt fails (for example the session no longer exists), the run is now set to
   blocked with the reason, so the dashboard lists it under "needs a look" instead of "running" for days. Continuing it

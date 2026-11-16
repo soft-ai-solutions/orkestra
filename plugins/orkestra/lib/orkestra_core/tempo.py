@@ -128,6 +128,8 @@ def reopen_count(t: Dict[str, Any]) -> int:
 
 
 RED_MISSING = "reopened(red-missing)"
+TASK_REVIEW_MODEL = "sonnet"          # first per-task review round (M/L): one small packet, mid-tier model
+TASK_REVIEW_RETRY_MODEL = "opus"      # a task that already failed a review round gets the strongest model
 CAP_BLOCK = "blocked: review round limit"      # note of a task parked by the round cap in autopilot
 
 
@@ -444,9 +446,13 @@ def _task_action(project: Path, st: Dict[str, Any], tid: str, deep: bool) -> Dic
         if small:
             return _n("cli", f"{tid}: green recorded → `orkestra task done {tid} {p} \"final review covers it (XS/S)\"`",
                       "XS/S runs may skip the per-task review", f"orkestra task done {tid} {p} \"final review covers it (XS/S)\"", **base)
-        return _n("dispatch", f"{tid}: green recorded, no review of this round → dispatch orkestra:reviewer (scope: task {tid}; "
-                              f"it writes reviews/{tid}.review.md; start it from `orkestra brief --review {tid} {p}`)",
-                  "evidence is in; the task review is the only missing step", **base)
+        # Cost: the first per-task review reads one pre-digested packet, so a mid-tier model is enough; a task that
+        # already failed review gets the strongest model. The final review always keeps the agent's default (opus).
+        model = TASK_REVIEW_RETRY_MODEL if reopen_count(t) else TASK_REVIEW_MODEL
+        return _n("dispatch", f"{tid}: green recorded, no review of this round → dispatch orkestra:reviewer with model: {model} "
+                              f"(scope: task {tid}; it writes reviews/{tid}.review.md; start it from "
+                              f"`orkestra brief --review {tid} {p}`)",
+                  "evidence is in; the task review is the only missing step", model=model, **base)
     if step.startswith("review_fail"):
         rnd = s["round"]
         if rnd >= MAX_REVIEW_ROUNDS:

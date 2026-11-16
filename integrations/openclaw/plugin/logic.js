@@ -400,6 +400,27 @@ export function mentionedProjects(text, projects) {
   return found.sort((a, b) => a.at - b.at).map((f) => f.name);
 }
 
+// A web address ("konfeti.site", "okulova.site'deki", "namazvakitleri.co") names where something is served, which may be
+// another project (a game under the Konfeti portal). Top-level domains are listed so "v1.2" or "a.b" never count.
+const WEB_ADDRESS = /(?:https?:\/\/)?[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.(?:site|com|co|net|org|app|dev|io|ai|me|tr|xyz|games?)\b(?:\/\S*)?/giu;
+
+/**
+ * The projects an owner order is about. When it names several but only one of them outside web addresses ("bu
+ * miyomino projesinde yani konfeti.site altındaki oyunda"), that one is the project: the address only says where the
+ * work is served. Otherwise the same list as mentionedProjects.
+ * @param {string} text
+ * @param {Array<string | { name: string }>} projects
+ * @returns {string[]}
+ */
+export function ownerProjects(text, projects) {
+  const all = mentionedProjects(text, projects);
+  if (all.length < 2) {
+    return all;
+  }
+  const outside = mentionedProjects(String(text ?? "").replace(WEB_ADDRESS, " "), projects);
+  return outside.length === 1 ? outside : all;
+}
+
 // "ide ayaklandır", "IDE'yi ayağa kaldır", "ide'yi yeniden başlat", "restart the ide", "revive ide", "/ide"
 const REVIVE_VERB = /^(ayaklandir|ayaga|kaldir|baslat|yeniden|restart|revive|relaunch|start|reopen|ac|acar|acin)/;
 

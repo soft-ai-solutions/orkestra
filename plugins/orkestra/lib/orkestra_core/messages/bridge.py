@@ -94,6 +94,9 @@ EN: Dict[str, str] = {
     "bridge.turn.failover": "({frm} is out of usage ({why}). Continuing on {to}.)",
     "bridge.turn.chain_exhausted": ("(Every engine in the fallback chain is at its usage limit. The run was not "
                                     "aborted. Send a message to continue once a limit resets.)"),
+    "bridge.turn.limit_wait": ("(Every engine in the fallback chain is at its usage limit. Your order is kept and "
+                               "continues by itself as soon as one of them resets; you do not need to write again.)"),
+    "bridge.turn.limit_resumed": "({to} is available again: your order continues.)",
 
     # --- serve / init / launchd ----------------------------------------------------------------------------------
     "bridge.serve.no_token": "no token configured: run: python3 orkestra_bridge.py init",
@@ -282,6 +285,9 @@ TR: Dict[str, str] = {
     "bridge.turn.failover": "({frm} kullanım sınırında ({why}). {to} ile devam ediliyor.)",
     "bridge.turn.chain_exhausted": ("(Yedek zincirindeki tüm motorlar kullanım sınırında. Çalışma iptal edilmedi. "
                                     "Bir sınır sıfırlanınca devam için mesaj yaz.)"),
+    "bridge.turn.limit_wait": ("(Yedek zincirindeki tüm motorlar kullanım sınırında. Emrin saklandı ve "
+                               "biri sıfırlanır sıfırlanmaz kendiliğinden devam edecek; yeniden yazmana gerek yok.)"),
+    "bridge.turn.limit_resumed": "({to} yeniden kullanılabilir: emrin devam ediyor.)",
 
     # --- serve / init / launchd ----------------------------------------------------------------------------------
     "bridge.serve.no_token": "token yapılandırılmamış, önce çalıştır: python3 orkestra_bridge.py init",

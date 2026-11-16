@@ -68,7 +68,8 @@ class TestFallbackHelpers(unittest.TestCase):
 
     def test_limit_texts(self):
         for text in ("You've hit your weekly limit · resets Nov 9", "Claude AI usage limit reached|1793",
-                     "You've hit your usage limit", "Credit balance is too low", "Invalid API key · Please run /login"):
+                     "You've hit your usage limit", "Credit balance is too low",
+                     "ActionRequiredError: Increase limits for faster responses You're out of usage.", "Invalid API key · Please run /login"):
             self.assertTrue(FB.is_limit_error(text), text)
         for text in ("API Error: 529 overloaded", "done", "", None):
             self.assertFalse(FB.is_limit_error(text), text)
@@ -170,6 +171,49 @@ class TestBridgeFailover(TurnBase):
             job = B.start_job(self.cfg(self.a), "demo", "do the thing", None, source="api")
         self.assertEqual(job["profile"]["name"], "second")
         self.assertEqual(job["engine"], "claude")
+
+    def test_owner_order_with_every_profile_limited_is_kept_not_refused(self):
+        self.chain({"name": "first", "engine": "claude", "bin": self.a},
+                   {"name": "second", "engine": "claude", "bin": self.b, "config_dir": self.acct_b})
+        FB.mark_limited(self.home, {"name": "first"}, 600)
+        FB.mark_limited(self.home, {"name": "second"}, 600)
+        turns = []
+        with mock.patch.object(B, "run_turn", lambda *a, **k: turns.append(a)), \
+                mock.patch.object(B.R, "open_run_for_request", lambda *a, **k: {"run_id": "001-x"}), \
+                mock.patch.object(B, "project_active_run", lambda p: None):
+            job = B.start_job(self.cfg(self.a), "demo", "fix the touch input", None, source="openclaw", owner=True)
+            with self.assertRaises(ValueError):          # a non-owner start is still refused
+                B.start_job(self.cfg(self.a), "demo", "other thing", None, source="api")
+        self.assertEqual(turns, [])
+        saved = B.load_job(job["id"])
+        self.assertEqual(saved["status"], "awaiting_user")
+        self.assertTrue(saved["limit_wait"])
+        self.assertEqual(saved["last_message"], t("bridge.turn.limit_wait"))
+        self.assertEqual(B.limit_retry_tick(self.cfg(self.a)), [])     # still cooling down: nothing starts
+
+    def test_owner_job_waits_at_the_limit_and_continues_when_a_profile_resets(self):
+        self.chain({"name": "only", "engine": "claude", "bin": self.a})
+        profile = FB.chain(B.OP.global_config())[0]
+        job = self.job(profile=profile, owner=True)
+        B.run_turn(self.cfg(self.a), job, "go", new=True)
+        parked = wait_for(lambda: (B.load_job(job["id"]) or {}).get("status") == "awaiting_user"
+                          and B.load_job(job["id"]), timeout=20)
+        self.assertTrue(parked["limit_wait"])
+        self.assertIn(t("bridge.turn.limit_wait"), parked["last_message"])
+        self.assertEqual(B.limit_retry_tick(self.cfg(self.a)), [])     # cooldown not over yet
+        # the limit resets: the next tick hands the job to the profile on a fresh session
+        self.chain({"name": "only", "engine": "claude", "bin": self.b, "config_dir": self.acct_b})
+        (self.home / "bridge" / "limits.json").write_text("{}")
+        self.assertEqual(B.limit_retry_tick(self.cfg(self.a)), [job["id"]])
+        rec_path = self.tmp / "b.json"
+        self.assertTrue(wait_for(lambda: rec_path.exists() and rec_path.stat().st_size > 0, timeout=20))
+        rec = json.loads(rec_path.read_text())
+        self.assertIn("--session-id", rec["argv"])
+        self.assertIn("orkestra", rec["prompt"])
+        done = wait_for(lambda: (B.load_job(job["id"]) or {}).get("status") in ("done", "error")
+                        and B.load_job(job["id"]), timeout=20)
+        self.assertNotIn("limit_wait", done)
+        self.assertTrue(any("only" in str(n.get("last_message")) for n in self.notified))
 
 
 if __name__ == "__main__":

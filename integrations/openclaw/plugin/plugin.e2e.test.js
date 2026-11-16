@@ -119,13 +119,19 @@ before(async () => {
     FAKE_COPILOT,
     "#!/usr/bin/env python3\nimport json, os, sys\n" +
       "args = sys.argv[1:]\n" +
-      "sid = args[args.index('--session-id') + 1] if '--session-id' in args else args[args.index('--resume') + 1]\n" +
+      // The bridge passes the Copilot session as `--session-id=<id>` (new) or `--resume=<id>` (later turns).
+      "sid = next(a.split('=', 1)[1] for a in args if a.startswith(('--session-id=', '--resume=')))\n" +
       "with open(os.path.join(os.getcwd(), '.fake-copilot.json'), 'w') as f: f.write(json.dumps(args))\n" +
       "print(json.dumps({'type': 'result', 'result': 'copilot-e2e-ok', 'session_id': sid}))\n",
     { mode: 0o755 },
   );
   const copilotHooks = path.join(COPILOT_PLUGIN, "com.github.copilot", "hooks");
   fs.mkdirSync(copilotHooks, { recursive: true });
+  // Copilot ignores a plugin directory without its manifest, and so does the bridge's readiness check.
+  fs.writeFileSync(
+    path.join(COPILOT_PLUGIN, "plugin.json"),
+    JSON.stringify({ name: "orkestra" }),
+  );
   const copilotHookScript = path.join(
     ORKESTRA,
     "plugins/orkestra/hooks/copilot_hook.py",

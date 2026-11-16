@@ -203,3 +203,19 @@ test("a status question is read-only: the fast owner path leaves it to the agent
     assert.equal(statusAsk(text), false, text);
   }
 });
+
+import { ownerProjects } from "./logic.js";
+
+test("an owner order names its project, not the site it is served under", () => {
+  const names = ["konfeti", "miyomino", "okulova", "namaz-vakitleri", "matiko"];
+  const order = "Bu miyomino projesinde yani konfeti.site altındaki bu oyunda telefonla oynarken dokunmalar doğru çalışmıyor";
+  assert.deepEqual(ownerProjects(order, names), ["miyomino"]);
+  assert.deepEqual(ownerProjects("https://konfeti.site/oyna/miyomino/ miyomino oyununu düzelt", names), ["miyomino"]);
+  // one project named only as an address keeps working as before
+  assert.deepEqual(ownerProjects("okulova.site altındaki projelerdeki geliştirmelere devam et", names), ["okulova"]);
+  // two projects named outside addresses stay two: the agent splits the order
+  assert.deepEqual(ownerProjects("miyomino ve matiko projelerini güncelle", names), ["miyomino", "matiko"]);
+  // only addresses: nothing to prefer, the list is unchanged
+  assert.deepEqual(ownerProjects("konfeti.site ve okulova.site sayfalarına bak", names), ["konfeti", "okulova"]);
+  assert.deepEqual(ownerProjects("namazvakitleri.co ana sayfası ile konfeti oyunları", names), ["konfeti"]);
+});

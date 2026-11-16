@@ -457,6 +457,7 @@ def start_job(cfg: Dict[str, Any], project_name: str, request: str, chat_id: Opt
     if len(request) < 3:
         raise ValueError(t("bridge.job.empty_request"))
     requested = engine
+    limit_wait = False
     if owner:
         if source not in OWNER_SOURCES:
             raise ValueError(t("bridge.job.owner_source", source=source))
@@ -466,6 +467,10 @@ def start_job(cfg: Dict[str, Any], project_name: str, request: str, chat_id: Opt
     profiles = engine_chain()
     if profiles and (owner or not requested):   # an explicitly named engine keeps its single-engine path
         profile = FB.pick(profiles, HOME, usable=_profile_usable(cfg, project))
+        if profile is None and owner:
+            # every account is cooling down: the owner's order is kept and starts on the first profile that frees up
+            profile = dict(profiles[0])
+            limit_wait = True
         if profile is None:
             raise ValueError(t("bridge.turn.chain_exhausted"))
         engine = profile["engine"]
@@ -533,6 +538,14 @@ def start_job(cfg: Dict[str, Any], project_name: str, request: str, chat_id: Opt
     save_job(job)
     if owner:
         note += OWNER_NOTE
+    if limit_wait:
+        # the run is open in the project (above), so the first free profile picks it up with a resume turn
+        job["status"], job["limit_wait"] = "awaiting_user", True
+        job["last_message"] = t("bridge.turn.limit_wait")
+        save_job(job)
+        log(f"job {job['id']} every profile is at its usage limit; the owner order waits for one to reset")
+        notify(cfg, job)
+        return job
     run_turn(cfg, job, EN.run_prompt(engine, request + note), new=True, said=f"/orkestra-run {request}{note}")
     return job
 
@@ -556,7 +569,8 @@ def reply_job(cfg: Dict[str, Any], job: Dict[str, Any], text: str) -> Dict[str, 
         except EN.EngineError as exc:
             raise ValueError(str(exc))
     job["auto_resumes"] = 0                  # a human answered: the automatic-continuation budget starts over
-    run_turn(cfg, job, text, new=False)
+    job.pop("limit_wait", None)              # ...and takes over from the wait for a usage limit to reset
+    run_turn(cfg, job, text, new=not job.get("turns"))
     return job
 
 
@@ -944,7 +958,10 @@ def _start_turn(cfg: Dict[str, Any], job: Dict[str, Any], prep: Dict[str, Any]) 
             if _failover(cfg, fresh, prof, message or err or "", proc.returncode):
                 return
             exhausted = True
-            message = (message.strip() + "\n\n" + t("bridge.turn.chain_exhausted")).strip()
+            if fresh.get("owner"):
+                fresh["limit_wait"] = True      # limit_retry_tick continues it on the first profile that resets
+            message = (message.strip() + "\n\n" + t(
+                "bridge.turn.limit_wait" if fresh.get("owner") else "bridge.turn.chain_exhausted")).strip()
         st = latest_run_state(Path(fresh["project_path"]), started)
         rstatus = st.get("status")
         fresh["run_id"] = st.get("run_id", fresh.get("run_id"))
@@ -1437,6 +1454,55 @@ def watchdog_loop(cfg: Dict[str, Any], stop: threading.Event) -> None:
             log(f"watchdog scan failed: {exc}")
 
 
+def limit_retry_tick(cfg: Dict[str, Any]) -> List[str]:
+    """Owner jobs parked because every profile of the chain was at its usage limit (`limit_wait`): the first profile
+    whose cooldown has ended takes the job over on a fresh session that resumes the open run. Returns the started ids.
+    A profile that is still out simply fails again in seconds, is cooled down again and the job parks again."""
+    profiles = engine_chain()
+    if not profiles:
+        return []
+    started: List[str] = []
+    for j in list_jobs():
+        if not j.get("limit_wait") or j.get("status") != "awaiting_user" or j["id"] in _procs or driver_pid(j):
+            continue
+        nxt = FB.pick(profiles, HOME, usable=_profile_usable(cfg, Path(j["project_path"])))
+        if nxt is None:
+            continue
+        with _lock:
+            cur = load_job(j["id"]) or j
+            if not cur.get("limit_wait") or cur.get("status") != "awaiting_user" or cur["id"] in _procs:
+                continue
+            cur.pop("limit_wait", None)
+            cur["profile"], cur["engine"] = nxt, nxt["engine"]
+            cur["status"] = "running"
+            cur["last_message"] = t("bridge.turn.limit_resumed", to=nxt["name"])
+            save_job(cur)
+        log(f"job {cur['id']} usage limit over on {nxt['name']}: continuing")
+        notify(cfg, cur)
+        try:
+            failover_now(cfg, cur["id"])
+        except Exception as exc:
+            log(f"job {cur['id']} limit retry failed: {exc}")
+            with _lock:
+                back = load_job(cur["id"]) or cur
+                if back.get("status") == "running" and back["id"] not in _procs:
+                    back["status"], back["limit_wait"] = "awaiting_user", True
+                    save_job(back)
+            continue
+        started.append(cur["id"])
+    return started
+
+
+def limit_retry_loop(cfg: Dict[str, Any], stop: threading.Event) -> None:
+    """Every `limit_retry_interval` seconds (default 60): limit_retry_tick."""
+    interval = float(cfg.get("limit_retry_interval") or 60)
+    while not stop.wait(interval):
+        try:
+            limit_retry_tick(cfg)
+        except Exception as exc:
+            log(f"limit retry scan failed: {exc}")
+
+
 def recover_jobs() -> None:
     """Jobs that were running when the bridge died are not running here anymore. An agent the old bridge started may
     still be alive: its pid stays in the job file (reply and start refuse while it runs, cancel kills its group);
@@ -1461,6 +1527,7 @@ def serve(cfg: Dict[str, Any]) -> None:
     stop = threading.Event()
     threading.Thread(target=telegram_poller, args=(cfg, stop), daemon=True).start()
     threading.Thread(target=watchdog_loop, args=(cfg, stop), daemon=True).start()
+    threading.Thread(target=limit_retry_loop, args=(cfg, stop), daemon=True).start()
     if float(cfg.get("watchdog_interval") or 0) > 0 and (OP.global_config().get("watchdog") or {}).get("autostart", True):
         if FW.start_thread(stop, notifier=fast_notifier(cfg)):    # singleton: a detached daemon may hold it
             log("fast watcher hosted by the bridge")
